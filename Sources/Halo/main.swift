@@ -37,25 +37,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loadProjects(ghostty.settings, into: workspace)
 
         // Wire HaloWindowController with the five session-management closures.
-        // Each closure calls the matching Workspace op then refresh() to keep the
-        // sidebar snapshot in sync. No Workspace.on* stubs needed — Chrome calls
-        // these directly on user action.
+        // Each op calls showActive()/handleChange() → workspace.onChange → refresh(),
+        // so no explicit refresh() call is needed here — the onChange callback below handles it.
         controller = HaloWindowController(
             theme: theme, content: workspace.container,
             onSelectSession: { [weak self] p, s in
-                self?.workspace.selectSession(p, s); self?.refresh()
+                self?.workspace.selectSession(p, s)
             },
             onCloseSession: { [weak self] p, s in
-                self?.workspace.closeSession(p, s);  self?.refresh()
+                self?.workspace.closeSession(p, s)
             },
             onNewSession: { [weak self] p in
-                self?.workspace.newSession(p);       self?.refresh()
+                self?.workspace.newSession(p)
             },
             onToggleExpand: { [weak self] p in
-                self?.workspace.toggleExpand(p);     self?.refresh()
+                self?.workspace.toggleExpand(p)
             },
             onNewProject: { [weak self] in
-                self?.workspace.newProject();         self?.refresh()
+                self?.workspace.newProject()
             })
 
         workspace.onChange = { [weak self] in self?.refresh() }

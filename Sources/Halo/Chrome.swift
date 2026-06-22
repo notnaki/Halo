@@ -1,19 +1,16 @@
 import AppKit
 
-// Keep the old Project struct for backward compat (used by old callers that may linger)
-struct Project { let name: String; let path: String }
-
 /// Window + chrome + collapsible projects sidebar.
 /// Uniform surface everywhere; seamless slim titlebar that flows into content.
 /// Matches the locked mockup: hairlines (white @0.07) do the separating, never
 /// brightness steps. Near-gray mint accent for selection + glow.
+@MainActor
 final class HaloWindowController: NSWindowController {
 
     private let theme: Theme
 
     // one near-uniform surface tone — from ghostty `background` / `halo-surface`
     private let surface: NSColor
-    private let sbWidth = HaloConfig.shared.sidebarWidth   // halo-sidebar-width
 
     // hairline alphas straight from the mockup tokens
     private func hair(_ a: CGFloat = 0.07) -> NSColor { NSColor(white: 1, alpha: a) }
@@ -98,9 +95,11 @@ final class HaloWindowController: NSWindowController {
         let old = stack.arrangedSubviews
         old.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
 
-        // PROJECTS header row: section label + trailing "+" button
+        // PROJECTS header row: section label + trailing "+" button.
+        // Pin trailing to stack so the header spans full sidebar width and the + sits at the right edge.
         let headerRow = makeProjHeaderRow(count: projects.count)
         stack.addArrangedSubview(headerRow)
+        headerRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
         stack.setCustomSpacing(6, after: headerRow)
 
         if projects.isEmpty {
@@ -608,7 +607,7 @@ final class HaloWindowController: NSWindowController {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
             ctx.allowsImplicitAnimation = true
-            // Use openWidth (updated by drag) rather than the original sbWidth constant.
+            // Use openWidth (updated by drag) so ⌘B restores to whatever drag set.
             sidebarWidth.animator().constant = sidebarOpen ? openWidth : 0
             sidebar.superview?.layoutSubtreeIfNeeded()
         }
