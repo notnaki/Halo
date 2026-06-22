@@ -157,7 +157,7 @@ final class ControlServer: @unchecked Sendable {
                 return ["ok": false, "error": "worktree: branch required"]
             }
             let base = argValue(args, "--base")
-            workspace.newWorktreeSession(workspace.activeP, branch: branch)
+            workspace.newWorktreeSession(workspace.activeP, branch: branch, base: base)
             return ["ok": true, "branch": branch, "base": base as Any]
         default:
             return ["ok": false, "error": "unknown cmd: \(cmd)"]

@@ -108,11 +108,11 @@ final class Workspace {
         addSession(p, cwd: NSHomeDirectory())
     }
 
-    func newWorktreeSession(_ p: Int, branch: String) {
+    func newWorktreeSession(_ p: Int, branch: String, base: String? = nil) {
         guard projs.indices.contains(p) else { return }
         let repo = projs[p].path
         do {
-            let dir = try Worktree.add(repo: repo, branch: branch, base: nil)
+            let dir = try Worktree.add(repo: repo, branch: branch, base: base)
             addSession(p, cwd: dir)                              // addSession sets active + showActive
             worktreeBranch[ObjectIdentifier(activeTree)] = branch
             handleChange()
@@ -178,6 +178,8 @@ final class Workspace {
 
     func closeSession(_ p: Int, _ s: Int) {
         guard projs.indices.contains(p), projs[p].sessions.indices.contains(s) else { return }
+        // Drop any worktree-branch tag for the session being removed/replaced.
+        worktreeBranch.removeValue(forKey: ObjectIdentifier(projs[p].sessions[s]))
         // Never let global session count reach 0.
         let total = projs.reduce(0) { $0 + $1.sessions.count }
         if Workspace.replaceOnClose(totalSessions: total) {
