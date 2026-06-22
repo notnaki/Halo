@@ -25,7 +25,7 @@ final class HaloWindowController: NSWindowController {
     }
     private enum Tier { case full, dim, faint }
 
-    // MARK: – five action closures (wired by AppDelegate)
+    // MARK: – action closures (wired by AppDelegate)
     private let onSelectSession:   (Int, Int) -> Void
     private let onCloseSession:    (Int, Int) -> Void
     private let onNewSession:      (Int) -> Void
@@ -34,6 +34,7 @@ final class HaloWindowController: NSWindowController {
     private let onRenameProject:   (Int, String) -> Void
     private let onSetProjectColor: (Int, NSColor?) -> Void
     private let onRemoveProject:   (Int) -> Void
+    private let onNewWorktree:     (Int, String) -> Void
 
     private var sidebar: NSView!
     private var sidebarWidth: NSLayoutConstraint!
@@ -56,7 +57,8 @@ final class HaloWindowController: NSWindowController {
          onNewProject:    @escaping () -> Void          = {},
          onRenameProject:   @escaping (Int, String) -> Void  = { _, _ in },
          onSetProjectColor: @escaping (Int, NSColor?) -> Void = { _, _ in },
-         onRemoveProject:   @escaping (Int) -> Void          = { _ in }) {
+         onRemoveProject:   @escaping (Int) -> Void          = { _ in },
+         onNewWorktree:     @escaping (Int, String) -> Void  = { _, _ in }) {
         self.theme = theme
         self.surface = theme.background
         self.openWidth = CGFloat(HaloConfig.shared.sidebarWidth)
@@ -68,6 +70,7 @@ final class HaloWindowController: NSWindowController {
         self.onRenameProject   = onRenameProject
         self.onSetProjectColor = onSetProjectColor
         self.onRemoveProject   = onRemoveProject
+        self.onNewWorktree     = onNewWorktree
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 680),
@@ -407,6 +410,9 @@ final class HaloWindowController: NSWindowController {
     private func makeProjectMenu(_ pi: Int, name: String, hasColor: Bool) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(BlockMenuItem(title: "Rename…") { [weak self] in self?.promptRename(pi, current: name) })
+        menu.addItem(BlockMenuItem(title: "New worktree session…") { [weak self] in
+            self?.promptWorktree(pi)
+        })
 
         let colorItem = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
         let colorMenu = NSMenu()
@@ -460,6 +466,23 @@ final class HaloWindowController: NSWindowController {
         alert.window.initialFirstResponder = field
         if alert.runModal() == .alertFirstButtonReturn {
             onRenameProject(pi, field.stringValue)
+        }
+    }
+
+    /// Prompt for a branch name to create a git-worktree-isolated session.
+    private func promptWorktree(_ pi: Int) {
+        let alert = NSAlert()
+        alert.messageText = "New worktree session"
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.placeholderString = "branch name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        if alert.runModal() == .alertFirstButtonReturn {
+            let branch = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !branch.isEmpty else { return }
+            onNewWorktree(pi, branch)
         }
     }
 

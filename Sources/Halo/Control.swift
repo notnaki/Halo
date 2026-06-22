@@ -7,7 +7,7 @@ func controlSocketPath() -> String {
     return base + "/control.sock"
 }
 
-let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab"]
+let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree"]
 
 // MARK: - Socket helpers
 
@@ -152,6 +152,13 @@ final class ControlServer: @unchecked Sendable {
             default: return ["ok": false, "error": "tab: new|next|prev|close"]
             }
             return ["ok": true, "tab": workspace.active]
+        case "worktree":
+            guard let branch = args.first else {
+                return ["ok": false, "error": "worktree: branch required"]
+            }
+            let base = argValue(args, "--base")
+            workspace.newWorktreeSession(workspace.activeP, branch: branch)
+            return ["ok": true, "branch": branch, "base": base as Any]
         default:
             return ["ok": false, "error": "unknown cmd: \(cmd)"]
         }
@@ -225,6 +232,7 @@ func printUsage() {
       list                                  list panes/tabs as JSON
       open [PATH]                           open PATH in a new tab (default ~)
       tab new|next|prev|close [--cwd DIR]   manage tabs
+      worktree <branch> [--base <ref>]      open a git-worktree-isolated session on <branch>
 
     Config (in your ghostty config; libghostty ignores the halo- keys):
       halo-projects = ~/a, ~/b      sidebar projects

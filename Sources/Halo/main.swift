@@ -5,7 +5,7 @@ if argv.first == "selfcheck" {
     // Pure-logic checks only. PaneTree/Chrome spawn real ghostty surfaces,
     // which need a live app + run loop — exercised by actually launching the app.
     // workspaceSelfCheck tests the Proj/SidebarProject data model without ghostty.
-    _ = ghosttyConfigSelfCheck(); controlSelfCheck(); gitSelfCheck(); workspaceSelfCheck()
+    _ = ghosttyConfigSelfCheck(); controlSelfCheck(); gitSelfCheck(); workspaceSelfCheck(); worktreeSelfCheck()
     // chromeSelfCheck creates AppKit objects (HaloWindowController → HaloConfig.shared →
     // GhosttyApp.shared). GhosttyApp.shared calls NSApp.isActive; NSApp is nil until
     // NSApplication.shared is first touched. Touch it here so GhosttyApp.shared doesn't crash.
@@ -68,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRemoveProject: { [weak self] p in
                 self?.workspace.removeProject(p)
+            },
+            onNewWorktree: { [weak self] p, branch in
+                self?.workspace.newWorktreeSession(p, branch: branch)
             })
 
         workspace.onChange = { [weak self] in self?.refresh() }

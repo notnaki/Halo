@@ -35,6 +35,9 @@ final class Workspace {
     private(set) var activeP = 0
     private(set) var activeS = 0
 
+    // Session→branch tag: keyed by PaneTree instance identity to avoid touching PaneTree's init.
+    private var worktreeBranch: [ObjectIdentifier: String] = [:]
+
     var activeTree: PaneTree { projs[activeP].sessions[activeS] }
 
     let container = NSView()
@@ -103,6 +106,22 @@ final class Workspace {
 
     func newSession(_ p: Int) {
         addSession(p, cwd: NSHomeDirectory())
+    }
+
+    func newWorktreeSession(_ p: Int, branch: String) {
+        guard projs.indices.contains(p) else { return }
+        let repo = projs[p].path
+        do {
+            let dir = try Worktree.add(repo: repo, branch: branch, base: nil)
+            addSession(p, cwd: dir)                              // addSession sets active + showActive
+            worktreeBranch[ObjectIdentifier(activeTree)] = branch
+            handleChange()
+        } catch {
+            NSSound.beep()
+            // surface the git error without crashing
+            let a = NSAlert(); a.messageText = "Couldn't create worktree"
+            a.informativeText = error.localizedDescription; a.runModal()
+        }
     }
 
     func renameProject(_ p: Int, _ name: String) {
@@ -202,6 +221,8 @@ final class Workspace {
                 var label = base
                 if panes > 1 { label += " · \(panes) panes" }
                 if multi { label = "\(si + 1). \(label)" }
+                // Prefer worktree branch tag when available.
+                if let br = worktreeBranch[ObjectIdentifier(tree)] { label = "⎇ \(br)" }
                 return SidebarSession(label: label, active: pi == activeP && si == activeS)
             }
             return SidebarProject(
