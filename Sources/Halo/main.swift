@@ -90,6 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return rows
     }
 
+    // M1 prefix keytable entry points (same code, not a parallel path):
+    //   prefix-s → showSwitcher()
+    //   prefix-, → promptRenameActiveSession() → Workspace.renameSession(activeP, activeS, …)
     /// Open the fuzzy session switcher over the key window (Cmd-K / prefix-s).
     func showSwitcher() {
         guard let ctx = active, let host = ctx.controller.window?.contentView else { return }
@@ -490,27 +493,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .newSession:  ws.newSession(ws.activeP)
         case .nextSession: ws.nextSession()
         case .prevSession: ws.prevSession()
-        case .rename:      promptRenameActiveProject()
+        case .rename:      promptRenameActiveSession()
         case .switcher: showSwitcher()
         case .detach, .kill:
             NSSound.beep()   // stub until M3 (detach, kill)
         }
     }
 
-    /// Prefix-`,` rename: rename the active session's PROJECT (the only rename the
-    /// existing Workspace exposes — Workspace.renameProject). A real per-session
-    /// name lands in Milestone 2; this reuses the existing action for now.
-    private func promptRenameActiveProject() {
+    /// Prefix-`,` rename: rename the ACTIVE session (Workspace.renameSession, added in M2).
+    private func promptRenameActiveSession() {
         guard let ws = active?.workspace else { return }
         let alert = NSAlert()
-        alert.messageText = "Rename project"
+        alert.messageText = "Rename session"
+        alert.informativeText = "Leave blank to clear the name and use the folder name."
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
         if alert.runModal() == .alertFirstButtonReturn {
-            ws.renameProject(ws.activeP, field.stringValue)
+            ws.renameSession(ws.activeP, ws.activeS, field.stringValue)
         }
     }
 }

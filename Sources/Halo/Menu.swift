@@ -60,6 +60,8 @@ func makeMainMenu(target: AppDelegate) -> NSMenu {
     viewItem.submenu = view
     view.addItem(withTitle: "Toggle Sidebar", action: #selector(AppDelegate.toggleSidebarMenu), keyEquivalent: "b")
         .target = target
+    view.addItem(withTitle: "Switch Session…", action: #selector(AppDelegate.showSwitcherMenu), keyEquivalent: "k")
+        .target = target
     let fsItem = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
     fsItem.keyEquivalentModifierMask = [.command, .control]
 
