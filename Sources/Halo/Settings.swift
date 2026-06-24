@@ -134,20 +134,31 @@ final class SettingsWindowController: NSWindowController {
         return b
     }
 
+    /// ghostty's built-in default terminal font (used when `font-family` is unset).
+    private static let defaultFontFamily = "JetBrains Mono"
+    private static let defaultSuffix = " (default)"
+
     /// Terminal font picker (ghostty `font-family`). Bundled families first, then
-    /// every installed family; selecting applies + reloads.
+    /// every installed family; the default is tagged "(default)". Applies + reloads.
     private func fontPopup() -> NSPopUpButton {
         let p = NSPopUpButton()
         p.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        let bundled = ["Geist Mono", "Martian Mono",
+        let def = Self.defaultFontFamily
+        var bundled = ["Geist Mono", "Martian Mono",
                        "Redaction", "Redaction 10", "Redaction 20", "Redaction 35",
                        "Redaction 50", "Redaction 70", "Redaction 100"]
-        p.addItems(withTitles: bundled)
+        // Ensure the default appears even if it isn't an installed family.
+        let installed = NSFontManager.shared.availableFontFamilies.sorted()
+        if !installed.contains(def) && !bundled.contains(def) { bundled.insert(def, at: 0) }
+        let label = { (fam: String) in fam == def ? fam + Self.defaultSuffix : fam }
+        p.addItems(withTitles: bundled.map(label))
         p.menu?.addItem(.separator())
-        p.addItems(withTitles: NSFontManager.shared.availableFontFamilies.sorted())
+        p.addItems(withTitles: installed.map(label))
+
         let current = GhosttyApp.shared.settings["font-family"]?
             .trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
-        if let current, !current.isEmpty { p.selectItem(withTitle: current) }
+        // Select the configured font, else the default entry.
+        p.selectItem(withTitle: label(current?.isEmpty == false ? current! : def))
         p.target = self; p.action = #selector(fontFamilyChanged(_:))
         return p
     }
@@ -175,7 +186,9 @@ final class SettingsWindowController: NSWindowController {
 
     /// Change the terminal font (ghostty `font-family`) and apply immediately.
     @objc private func fontFamilyChanged(_ p: NSPopUpButton) {
-        guard let name = p.titleOfSelectedItem else { return }
+        guard let title = p.titleOfSelectedItem else { return }
+        let name = title.hasSuffix(Self.defaultSuffix)
+            ? String(title.dropLast(Self.defaultSuffix.count)) : title
         setHaloConfigKey("font-family", name)
         configView?.string = currentConfigText()
         onReload()
