@@ -726,6 +726,12 @@ final class HaloWindowController: NSWindowController {
             pill.widthAnchor.constraint(greaterThanOrEqualToConstant: 52),
         ])
 
+        // Keep the dir label from overlapping the prefix pill when it's visible.
+        // .defaultHigh so it yields to the looser host-trailing bound when the pill is hidden.
+        let dirVsPill = dirLabel.trailingAnchor.constraint(lessThanOrEqualTo: pill.leadingAnchor, constant: -8)
+        dirVsPill.priority = .defaultHigh
+        dirVsPill.isActive = true
+
         acc.view = host
         window?.addTitlebarAccessoryViewController(acc)
     }
