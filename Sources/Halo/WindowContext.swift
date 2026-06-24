@@ -11,6 +11,8 @@ final class WindowContext {
 
     private let onBecomeKey: (WindowContext) -> Void
     private let onClose: (WindowContext) -> Void
+    /// Set by AppDelegate: persist all windows after this one changes (debounced).
+    var onPersist: (() -> Void)?
     // nonisolated(unsafe): only mutated on main during init; deinit (nonisolated)
     // reads it once to deregister. NotificationCenter.removeObserver is thread-safe.
     private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
@@ -49,7 +51,7 @@ final class WindowContext {
             onNewWorktree:     { [weak ws] p, branch in ws?.newWorktreeSession(p, branch: branch) })
 
         // self is fully initialized past this point.
-        ws.onChange = { [weak self] in self?.refresh() }
+        ws.onChange = { [weak self] in self?.refresh(); self?.onPersist?() }
         let nc = NotificationCenter.default
         let win = controller.window
         observers.append(nc.addObserver(forName: NSWindow.didBecomeKeyNotification, object: win, queue: .main) { [weak self] _ in

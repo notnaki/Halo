@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var server: ControlServer!
     var theme = Theme()
     private var attnTimer: Timer?
+    // Window-state persistence (windows.json). `restoring` suppresses saves while
+    // we rebuild windows at launch; `savePending` coalesces rapid changes.
+    private var restoring = false
+    private var savePending = false
 
     /// Create, show, and track a new window. ⌘N / first launch.
     @discardableResult
@@ -38,7 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ctx = WindowContext(theme: theme,
             onBecomeKey: { [weak self] c in self?.lastKey = c },
             onClose:     { [weak self] c in self?.windows.removeAll { $0 === c }
-                                            if self?.lastKey === c { self?.lastKey = self?.windows.last } })
+                                            if self?.lastKey === c { self?.lastKey = self?.windows.last }
+                                            self?.scheduleSave() })   // a closed window shouldn't reappear
+        ctx.onPersist = { [weak self] in self?.scheduleSave() }
         windows.append(ctx)
         lastKey = ctx
         // Only the first window restores/saves its frame; later ones cascade off it.
@@ -52,13 +58,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func newWindowMenu() { newWindow(); NSApp.activate(ignoringOtherApps: true) }
 
+    // MARK: - Window-state persistence
+
+    private static var windowsFile: String {
+        let dir = NSHomeDirectory() + "/Library/Application Support/halo"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir + "/windows.json"
+    }
+
+    /// Rebuild last session's windows from windows.json, else one fresh window.
+    private func restoreWindows() {
+        restoring = true
+        defer { restoring = false }
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: Self.windowsFile)),
+           let saved = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+           !saved.isEmpty {
+            for win in saved {
+                let ctx = newWindow()          // builds a default window…
+                ctx.workspace.hydrate(from: win)  // …then replaces its state with the saved one
+                ctx.refresh()
+            }
+        } else {
+            newWindow()
+        }
+    }
+
+    /// Persist every window's projects + sessions-by-cwd. Coalesced so rapid
+    /// changes (focus/git callbacks) don't write on every tick.
+    private func scheduleSave() {
+        guard !restoring, !savePending else { return }
+        savePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.savePending = false
+            self?.saveWindows()
+        }
+    }
+
+    func saveWindows() {
+        let arr = windows.map { $0.workspace.serialize() }
+        guard let data = try? JSONSerialization.data(withJSONObject: arr, options: [.prettyPrinted]) else { return }
+        try? data.write(to: URL(fileURLWithPath: Self.windowsFile))
+    }
+
+    func applicationWillTerminate(_ note: Notification) { saveWindows() }
+
     func applicationDidFinishLaunching(_ note: Notification) {
         Fonts.register()                             // bundle Geist/Martian Mono before building UI
         let ghostty = GhosttyApp.shared             // inits libghostty (init/config/app) — native config sync
         theme = ghostty.theme                        // colors from the real ghostty config
 
         NSApp.mainMenu = makeMainMenu(target: self)   // bundle-less binary: build the menu bar
-        newWindow()                                   // first window (shows + focuses)
+        restoreWindows()                              // saved windows (or one fresh window)
 
         server = ControlServer(workspaceProvider: { [weak self] in self?.active?.workspace })
         server.onReload = { [weak self] in self?.reloadConfig() }

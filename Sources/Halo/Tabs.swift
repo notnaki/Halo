@@ -382,6 +382,69 @@ final class Workspace {
         projs.append(Proj(id: "cfg:\(path)", name: name, path: path, sessions: [], expanded: false))
     }
 
+    // MARK: - Window-state persistence (this window's projects + sessions-by-cwd)
+
+    /// Snapshot for windows.json: each project (id/name/path/color/expanded) with its
+    /// sessions reduced to their focused-pane cwd, plus the active project/session.
+    /// ponytail: v1 persists cwds only — NOT split layouts or live processes (a process
+    /// can't be restored); each session reopens as a single shell at its cwd.
+    func serialize() -> [String: Any] {
+        let projsData: [[String: Any]] = projs.map { p in
+            var d: [String: Any] = [
+                "id": p.id, "name": p.name, "path": p.path, "expanded": p.expanded,
+                "sessions": p.sessions.map { $0.focusedCwd ?? p.path },
+            ]
+            if let c = p.color { d["color"] = hexString(c) }
+            return d
+        }
+        return ["projects": projsData, "activeProject": activeP, "activeSession": activeS]
+    }
+
+    /// Replace the launch state with a saved window snapshot. Robust: a session cwd
+    /// that no longer exists falls back to the project path, then ~. Always leaves
+    /// ≥1 project and the active project with ≥1 session.
+    func hydrate(from win: [String: Any]) {
+        guard let projsData = win["projects"] as? [[String: Any]], !projsData.isEmpty else { return }
+        // Tear down the default state this Workspace built in init.
+        projs.forEach { $0.sessions.forEach { forget($0) } }
+        projs.removeAll()
+
+        let fm = FileManager.default
+        func usableDir(_ cwd: String, fallback: String) -> String {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue { return cwd }
+            if fm.fileExists(atPath: fallback, isDirectory: &isDir), isDir.boolValue { return fallback }
+            return NSHomeDirectory()
+        }
+
+        for pd in projsData {
+            let id = pd["id"] as? String ?? "u:\(UUID().uuidString)"
+            let name = pd["name"] as? String ?? "untitled"
+            let path = pd["path"] as? String ?? NSHomeDirectory()
+            let color = (pd["color"] as? String).flatMap { ghosttyColor($0) }
+            let expanded = pd["expanded"] as? Bool ?? true
+            var proj = Proj(id: id, name: name, path: path, sessions: [], expanded: expanded, color: color)
+            for cwd in (pd["sessions"] as? [String] ?? []) {
+                proj.sessions.append(makeTree(cwd: usableDir(cwd, fallback: path)))
+            }
+            projs.append(proj)
+        }
+
+        // Invariants: ≥1 project, active project has ≥1 session.
+        if projs.isEmpty {
+            var home = makeProj(name: "home", path: NSHomeDirectory(), expanded: true, id: "home")
+            home.sessions.append(makeTree(cwd: NSHomeDirectory()))
+            projs.append(home)
+        }
+        activeP = min(max(0, win["activeProject"] as? Int ?? 0), projs.count - 1)
+        if projs[activeP].sessions.isEmpty {
+            projs[activeP].sessions.append(makeTree(cwd: projs[activeP].path))
+            projs[activeP].expanded = true
+        }
+        activeS = min(max(0, win["activeSession"] as? Int ?? 0), projs[activeP].sessions.count - 1)
+        showActive()
+    }
+
     // MARK: - Cycle sessions within active project
 
     func nextSession() {
