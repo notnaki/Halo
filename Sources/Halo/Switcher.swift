@@ -8,6 +8,7 @@ struct SessionRow {
     let subtitle: String     // window/project context + cwd
     let detached: Bool       // M3: true ⇒ a daemon session with no live pane
     let activate: () -> Void // jump to (M3: attach) this session
+    let paneID: String?      // M4: the focused pane's stable id (nil for browser leaves)
 }
 
 /// Fuzzy-filter switcher overlay: a centered panel listing every session
@@ -23,6 +24,8 @@ final class SwitcherOverlay: NSView, NSTextFieldDelegate {
     private let input = NSTextField()
     private let listStack = NSStackView()
     private let onClose: () -> Void
+    /// M4: Called when the user presses Cmd-Enter on a row with a paneID.
+    var onMirror: ((SessionRow) -> Void)?
 
     init(theme: Theme, rows: [SessionRow], onClose: @escaping () -> Void) {
         self.theme = theme
@@ -165,7 +168,14 @@ final class SwitcherOverlay: NSView, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
         switch sel {
         case #selector(insertNewline(_:)):
-            if shown.indices.contains(selected) { let r = shown[selected]; onClose(); r.activate() }
+            guard shown.indices.contains(selected) else { return true }
+            let r = shown[selected]
+            // Cmd-Enter: mirror the highlighted session's focused pane into the active window.
+            if NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+                if r.paneID != nil { onClose(); onMirror?(r) }
+            } else {
+                onClose(); r.activate()
+            }
             return true
         case #selector(cancelOperation(_:)):
             onClose(); return true

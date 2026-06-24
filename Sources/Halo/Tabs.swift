@@ -116,6 +116,13 @@ final class Workspace {
         addSession(p, cwd: NSHomeDirectory())
     }
 
+    /// Mirror an existing session (by paneID) as a new pane in the active session.
+    /// Used by the switcher's "mirror here" action — both panes show the same shell.
+    func mirror(paneID: String) {
+        activeTree.mirrorFocused(paneID: paneID)
+        handleChange()
+    }
+
     /// Open a session that reattaches an existing daemon paneID (from the switcher's
     /// detached list). Mirrors addSession but seeds the tree's root paneID so
     /// halo-attach <paneID> reattaches the live shell.

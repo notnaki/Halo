@@ -84,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             ctx?.controller.window?.makeKeyAndOrderFront(nil)
                             ctx?.workspace.selectSession(pi, si)
                             NSApp.activate(ignoringOtherApps: true)
-                        }))
+                        },
+                        paneID: tree.focusedPaneID))
                 }
             }
         }
@@ -96,7 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 title: s.name ?? s.cwd ?? s.id,
                 subtitle: "detached",
                 detached: true,
-                activate: { [weak self] in self?.reattachDetached(s.id, cwd: s.cwd) }))
+                activate: { [weak self] in self?.reattachDetached(s.id, cwd: s.cwd) },
+                paneID: s.id))
         }
         return rows
     }
@@ -109,6 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let ctx = active, let host = ctx.controller.window?.contentView else { return }
         if host.subviews.contains(where: { $0 is SwitcherOverlay }) { return }   // already open
         let overlay = SwitcherOverlay(theme: theme, rows: sessionRows()) { [weak host] in
+            host?.subviews.compactMap { $0 as? SwitcherOverlay }.forEach { $0.removeFromSuperview() }
+        }
+        // M4: Cmd-Enter mirrors the highlighted session's focused pane into the active window.
+        overlay.onMirror = { [weak ctx, weak host] row in
+            guard let pid = row.paneID else { return }
+            ctx?.workspace.mirror(paneID: pid)
             host?.subviews.compactMap { $0 as? SwitcherOverlay }.forEach { $0.removeFromSuperview() }
         }
         overlay.frame = host.bounds
