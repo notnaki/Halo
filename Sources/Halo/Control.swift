@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import HaloMux
 
 func controlSocketPath() -> String {
     let base = NSHomeDirectory() + "/Library/Application Support/halo"
@@ -7,7 +8,7 @@ func controlSocketPath() -> String {
     return base + "/control.sock"
 }
 
-let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search"]
+let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "sessions", "kill"]
 
 // MARK: - Socket helpers
 
@@ -115,6 +116,18 @@ final class ControlServer: @unchecked Sendable {
     }
 
     @MainActor private func dispatch(_ cmd: String, _ args: [String]) -> [String: Any] {
+        // Daemon-only verbs: don't need a workspace/window — talk straight to halod.
+        switch cmd {
+        case "sessions":
+            let list = MuxClient.sessions()
+            return ["ok": true, "sessions": list.map { ["id": $0.id, "name": $0.name as Any,
+                "cwd": $0.cwd as Any, "alive": $0.alive, "attached": $0.attachedCount] }]
+        case "kill":
+            guard let id = args.first else { return ["ok": false, "error": "kill: <id> required"] }
+            MuxClient.kill(paneID: id)
+            return ["ok": true, "killed": id]
+        default: break
+        }
         guard let workspace = workspaceProvider() else { return ["ok": false, "error": "no window"] }
         let cwd = argValue(args, "--cwd")
         let tree = workspace.activeTree
@@ -220,6 +233,14 @@ func runControlCLI(_ args: [String]) -> Int32 {
 
     if verb == "list", let panes = obj["panes"] as? [Any] {
         for p in panes { print(p) }
+    } else if verb == "sessions", let list = obj["sessions"] as? [[String: Any]] {
+        for s in list {
+            let id = s["id"] as? String ?? "?"
+            let name = s["name"] as? String ?? "-"
+            let alive = (s["alive"] as? Bool ?? false) ? "alive" : "dead"
+            let att = s["attached"] as? Int ?? 0
+            print("\(id)\t\(name)\t\(alive)\tattached=\(att)")
+        }
     } else if verb == "capture", let text = obj["text"] as? String {
         print(text)
     } else if verb == "open", let path = obj["path"] as? String {
@@ -254,6 +275,8 @@ func printUsage() {
       worktree <branch> [--base <ref>]      open a git-worktree-isolated session on <branch>
       browser [url|port]                    open an embedded browser pane (port → http://localhost:PORT)
       reload                                re-read the config and apply colors/font/theme live
+      sessions                              list daemon sessions (id, name, alive, attached)
+      kill <id>                             terminate a session's shell under the daemon
 
     Config (in your ghostty config; libghostty ignores the halo- keys):
       halo-projects = ~/a, ~/b      sidebar projects

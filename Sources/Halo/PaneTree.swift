@@ -235,6 +235,17 @@ final class PaneTree {
         splitAndAttach(newLeaf, split: .vertical)
     }
 
+    /// Every TerminalPane paneID currently live in this tree (for switcher
+    /// dedup: a daemon session already shown by a pane isn't "detached").
+    var paneIDs: [String] { leaves.compactMap { ($0.content as? TerminalPane)?.paneID } }
+
+    /// Explicit kill (prefix-x / menu): terminate the shell under halod, then close
+    /// the pane locally. Distinct from Cmd-W, which only detaches.
+    func killFocusedSession() {
+        if let pane = focused { MuxClient.kill(paneID: pane.paneID) }
+        closeFocused()
+    }
+
     func closeFocused() {
         guard leaves.count > 1, let target = leaf(focusedId) else { return }
         if zoomed { unzoom() }

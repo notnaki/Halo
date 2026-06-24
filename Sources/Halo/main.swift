@@ -88,6 +88,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // Detached sessions (live under halod but not shown in any pane) — so they're
+        // never invisible. Dedup against every in-app paneID, then append the orphans.
+        let shownIDs = Set(windows.flatMap { $0.workspace.projs.flatMap { $0.sessions.flatMap { $0.paneIDs } } })
+        for s in MuxClient.sessions() where s.alive && !shownIDs.contains(s.id) {
+            rows.append(SessionRow(
+                title: s.name ?? s.cwd ?? s.id,
+                subtitle: "detached",
+                detached: true,
+                activate: { [weak self] in self?.reattachDetached(s.id, cwd: s.cwd) }))
+        }
         return rows
     }
 
@@ -227,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if UserDefaults.standard.bool(forKey: "HaloSkipQuitConfirm") { return .terminateNow }
         let a = NSAlert()
         a.messageText = "Quit Halo?"
-        a.informativeText = "This closes all sessions and their running programs."
+        a.informativeText = "Your sessions keep running in the background and reattach next launch."
         a.alertStyle = .warning
         a.showsSuppressionButton = true
         a.suppressionButton?.title = "Don't ask again"
@@ -361,6 +371,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleSidebarMenu() { active?.controller.toggleSidebar() }
 
+    /// Explicit kill of the focused session's shell under halod (menu / no key
+    /// equivalent — Cmd-W only detaches).
+    @objc func killSessionMenu() { active?.workspace.activeTree.killFocusedSession() }
+
+    /// Reattach a detached daemon session (chosen from the switcher): open a new
+    /// session whose tree carries that paneID so halo-attach <paneID> reattaches it,
+    /// then bring the window forward.
+    func reattachDetached(_ paneID: String, cwd: String?) {
+        guard let ctx = active else { return }
+        ctx.workspace.reattachSession(paneID, cwd: cwd)
+        ctx.controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     // MARK: - "Default terminal" integration (open folders / Finder Services)
 
     private var pendingOpenDirs: [String] = []
@@ -424,6 +448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Split panes (unchanged)
             case "d":  ws.activeTree.splitFocused(shift ? .horizontal : .vertical, cwd: ws.activeTree.focusedCwd); return nil
             // ⌘W: pane → session → window (cascade). ⌘⇧W: close session.
+            // With halo-persist on (M3), closing a pane/session only tears down the ghostty
+            // surface → the halo-attach relay EOFs and detaches; the shell keeps running
+            // under halod. Explicit kill is prefix-x / `halo kill`, never Cmd-W.
             case "w":
                 if shift {
                     ws.closeSession(ws.activeP, ws.activeS)
@@ -496,8 +523,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .prevSession: ws.prevSession()
         case .rename:      promptRenameActiveSession()
         case .switcher: showSwitcher()
-        case .detach, .kill:
-            NSSound.beep()   // stub until M3 (detach, kill)
+        // Detach: close the pane → relay EOFs → shell lives on under halod.
+        case .detach: ws.activeTree.closeFocused()
+        // Kill: terminate the shell under halod, then close the pane locally.
+        case .kill:   ws.activeTree.killFocusedSession()
         }
     }
 

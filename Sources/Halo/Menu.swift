@@ -62,6 +62,9 @@ func makeMainMenu(target: AppDelegate) -> NSMenu {
         .target = target
     view.addItem(withTitle: "Switch Session…", action: #selector(AppDelegate.showSwitcherMenu), keyEquivalent: "k")
         .target = target
+    // No key equivalent: explicit kill must not be confused with ⌘W (which detaches).
+    view.addItem(withTitle: "Kill Session", action: #selector(AppDelegate.killSessionMenu), keyEquivalent: "")
+        .target = target
     let fsItem = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
     fsItem.keyEquivalentModifierMask = [.command, .control]
 

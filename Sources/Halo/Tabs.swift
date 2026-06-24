@@ -116,6 +116,19 @@ final class Workspace {
         addSession(p, cwd: NSHomeDirectory())
     }
 
+    /// Open a session that reattaches an existing daemon paneID (from the switcher's
+    /// detached list). Mirrors addSession but seeds the tree's root paneID so
+    /// halo-attach <paneID> reattaches the live shell.
+    func reattachSession(_ paneID: String, cwd: String?) {
+        let p = activeP
+        let tree = makeTree(cwd: cwd, paneID: paneID)
+        projs[p].sessions.append(tree)
+        projs[p].expanded = true
+        activeP = p
+        activeS = projs[p].sessions.count - 1
+        showActive()
+    }
+
     func newWorktreeSession(_ p: Int, branch: String, base: String? = nil) {
         guard projs.indices.contains(p) else { return }
         let repo = projs[p].path
