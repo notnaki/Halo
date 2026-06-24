@@ -308,6 +308,14 @@ import GhosttyKit
     /// Called (on the main actor) when ghostty fires RING_BELL or DESKTOP_NOTIFICATION.
     func fireAttention() { onAttention?() }
 
+    /// Tell the relay whether this mirror is focused (→ daemon picks this client's
+    /// grid; idle mirrors letterbox). ONLY when halo-persist is on — otherwise the
+    /// foreground process is a bare shell and SIGUSR1/2 would terminate it.
+    private func signalFocus(_ focused: Bool) {
+        guard HaloConfig.shared.persist, let pid = foregroundPID else { return }
+        kill(pid, focused ? SIGUSR1 : SIGUSR2)
+    }
+
     // MARK: - NSView
 
     override var acceptsFirstResponder: Bool { true }
@@ -316,12 +324,14 @@ import GhosttyKit
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok, let surface { ghostty_surface_set_focus(surface, true) }
+        if ok { signalFocus(true) }
         return ok
     }
 
     override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
         if ok, let surface { ghostty_surface_set_focus(surface, false) }
+        if ok { signalFocus(false) }
         return ok
     }
 
