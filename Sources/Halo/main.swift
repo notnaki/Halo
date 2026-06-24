@@ -1,11 +1,12 @@
 import AppKit
+import HaloMux
 
 let argv = Array(CommandLine.arguments.dropFirst())
 if argv.first == "selfcheck" {
     // Pure-logic checks only. PaneTree/Chrome spawn real ghostty surfaces,
     // which need a live app + run loop — exercised by actually launching the app.
     // workspaceSelfCheck tests the Proj/SidebarProject data model without ghostty.
-    _ = ghosttyConfigSelfCheck(); controlSelfCheck(); gitSelfCheck(); portsSelfCheck(); workspaceSelfCheck(); worktreeSelfCheck(); browserSelfCheck(); prefixKeytableSelfCheck(); fuzzySelfCheck(); sessionNameSelfCheck()
+    _ = ghosttyConfigSelfCheck(); controlSelfCheck(); gitSelfCheck(); portsSelfCheck(); workspaceSelfCheck(); worktreeSelfCheck(); browserSelfCheck(); prefixKeytableSelfCheck(); fuzzySelfCheck(); sessionNameSelfCheck(); muxProtocolSelfCheck()
     // chromeSelfCheck creates AppKit objects (HaloWindowController → HaloConfig.shared →
     // GhosttyApp.shared). GhosttyApp.shared calls NSApp.isActive; NSApp is nil until
     // NSApplication.shared is first touched. Touch it here so GhosttyApp.shared doesn't crash.
