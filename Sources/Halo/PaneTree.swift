@@ -1,5 +1,11 @@
 import AppKit
 
+/// Normalize a user-entered session name: trimmed, or nil when blank.
+func normalizedSessionName(_ s: String?) -> String? {
+    let trimmed = s?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (trimmed?.isEmpty ?? true) ? nil : trimmed
+}
+
 /// Protocol satisfied by any view that can live inside a Leaf.
 /// `TerminalPane` and `BrowserPane` both conform.
 @MainActor protocol PaneContent: NSView {
@@ -115,8 +121,7 @@ final class PaneTree {
     /// Set (or clear, when blank) this session's name. Fires onFocusChange so
     /// the sidebar + any open switcher re-render.
     func setName(_ s: String?) {
-        let trimmed = s?.trimmingCharacters(in: .whitespacesAndNewlines)
-        name = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        name = normalizedSessionName(s)
         onFocusChange?()
     }
 
@@ -389,6 +394,14 @@ final class PaneTree {
     var paneCount: Int { leaves.count }
 }
 
+func sessionNameSelfCheck() {
+    assert(normalizedSessionName(nil) == nil, "nil name → nil")
+    assert(normalizedSessionName("  ") == nil, "blank name → nil")
+    assert(normalizedSessionName("build") == "build", "name kept")
+    assert(normalizedSessionName("  build  ") == "build", "name trimmed")
+    print("sessionNameSelfCheck OK")
+}
+
 @MainActor
 func paneTreeSelfCheck() {
     let t = PaneTree(theme: Theme())
@@ -398,10 +411,5 @@ func paneTreeSelfCheck() {
     assert(t.list().count == 2, "expected 2 leaves after split")
     let focusedCount = t.list().filter { ($0["focused"] as? Bool) == true }.count
     assert(focusedCount == 1, "exactly one leaf must be focused")
-    assert(t.name == nil, "new PaneTree has no name")
-    t.setName("build")
-    assert(t.name == "build", "setName stores the name")
-    t.setName("  ")
-    assert(t.name == nil, "blank name clears back to nil")
     print("paneTreeSelfCheck OK")
 }
