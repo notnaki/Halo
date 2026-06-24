@@ -29,6 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var active: WindowContext? { lastKey ?? windows.first }
     var server: ControlServer!
     var theme = Theme()
+    // Prefix mode (tmux-style). `prefix` is nil when halo-prefix is empty/disabled.
+    private let prefixState = PrefixState()
+    private var prefix: (mods: NSEvent.ModifierFlags, key: String)?
+    private var prefixTable: [String: PrefixAction] = defaultPrefixKeytable
     private var attnTimer: Timer?
     // Window-state persistence (windows.json). `restoring` suppresses saves while
     // we rebuild windows at launch; `savePending` coalesces rapid changes.
@@ -115,6 +119,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.start()
 
         installKeybinds()
+        let settings = GhosttyApp.shared.settings
+        prefix = parsePrefixSpec(settings["halo-prefix"] ?? "ctrl+b")
+        let binds = (settings["halo-prefix-bind"] ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        prefixTable = parsePrefixKeytable(binds)
+        prefixState.onArmedChange = { [weak self] armed in
+            self?.active?.controller.setPrefixArmed(armed)
+        }
         // Poll background sessions (all windows) for command-finished → attention ring.
         attnTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.windows.forEach { $0.pollAttention() } }
@@ -335,7 +348,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // ponytail: hard-coded keybinds. make them config-driven when asked.
     private func installKeybinds() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, e.modifierFlags.contains(.command) else { return e }
+            guard let self else { return e }
+            // ── Prefix mode (runs before the ⌘ keybinds) ──────────────────────
+            if let prefix = self.prefix {
+                let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+                let isEscape = (e.keyCode == 53)   // Escape
+                if self.prefixState.armed {
+                    // Resolve the NEXT key. Arrows → tokens; else the typed char.
+                    let key = Self.prefixKeyToken(e)
+                    if let action = self.prefixState.handle(key: key, isEscape: isEscape, table: self.prefixTable) {
+                        self.dispatchPrefix(action)
+                    }
+                    return nil   // swallow the key whether it fired, cancelled, or was Escape
+                }
+                // Not yet armed: is THIS the prefix chord?
+                if mods == prefix.mods, (e.charactersIgnoringModifiers ?? "").lowercased() == prefix.key {
+                    self.prefixState.arm()
+                    return nil
+                }
+            }
+            guard e.modifierFlags.contains(.command) else { return e }
             let shift = e.modifierFlags.contains(.shift)
             // ⌘N: new window (doesn't need a key window).
             if !shift, e.charactersIgnoringModifiers == "n" { self.newWindow(); return nil }
@@ -384,6 +416,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             default:   return e
             }
+        }
+    }
+
+    /// The keytable token for a pressed key: arrow keys → direction words, else
+    /// the lowercased character (so % " , map through verbatim).
+    private static func prefixKeyToken(_ e: NSEvent) -> String {
+        switch e.keyCode {
+        case 123: return "left"
+        case 124: return "right"
+        case 125: return "down"
+        case 126: return "up"
+        default: return (e.charactersIgnoringModifiers ?? "").lowercased()
+        }
+    }
+
+    /// Run a resolved prefix action against the active window's workspace, using
+    /// only methods that already exist. detach/kill/switcher are stubbed (beep)
+    /// until Milestones 2–3 land their real behavior.
+    private func dispatchPrefix(_ action: PrefixAction) {
+        guard let ctx = active else { return }
+        let ws = ctx.workspace
+        switch action {
+        case .splitVertical:   _ = ws.activeTree.splitFocused(.vertical, cwd: ws.activeTree.focusedCwd)
+        case .splitHorizontal: _ = ws.activeTree.splitFocused(.horizontal, cwd: ws.activeTree.focusedCwd)
+        case .focusLeft, .focusUp:    ws.activeTree.focusPrev()
+        case .focusRight, .focusDown: ws.activeTree.focusNext()
+        case .zoom:        ws.activeTree.zoomFocused()
+        case .newSession:  ws.newSession(ws.activeP)
+        case .nextSession: ws.nextSession()
+        case .prevSession: ws.prevSession()
+        case .rename:      promptRenameActiveProject()
+        case .switcher, .detach, .kill:
+            NSSound.beep()   // stub until M2 (switcher) / M3 (detach, kill)
+        }
+    }
+
+    /// Prefix-`,` rename: rename the active session's PROJECT (the only rename the
+    /// existing Workspace exposes — Workspace.renameProject). A real per-session
+    /// name lands in Milestone 2; this reuses the existing action for now.
+    private func promptRenameActiveProject() {
+        guard let ws = active?.workspace else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename project"
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        if alert.runModal() == .alertFirstButtonReturn {
+            ws.renameProject(ws.activeP, field.stringValue)
         }
     }
 }
