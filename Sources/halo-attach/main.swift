@@ -84,6 +84,16 @@ signal(SIGWINCH) { _ in
         d.withUnsafeBytes { raw in _ = write(gSock, raw.baseAddress, raw.count) }
     }
 }
+// M4: GUI signals focus changes to this relay; forward them as focus frames.
+// Mirrors the SIGWINCH handler: write directly to gSock (no dispatch run loop).
+signal(SIGUSR1) { _ in   // focused
+    let d = encode(ClientFrame.focus(true))
+    d.withUnsafeBytes { raw in _ = write(gSock, raw.baseAddress, raw.count) }
+}
+signal(SIGUSR2) { _ in   // idle mirror
+    let d = encode(ClientFrame.focus(false))
+    d.withUnsafeBytes { raw in _ = write(gSock, raw.baseAddress, raw.count) }
+}
 
 // ── pump loop: stdin → daemon(input), daemon(server frames) → stdout ─────────
 _ = fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL, 0) | O_NONBLOCK)
