@@ -18,6 +18,8 @@ func makeMainMenu(target: AppDelegate) -> NSMenu {
     app.addItem(.separator())
     app.addItem(withTitle: "Settings…", action: #selector(AppDelegate.openSettings), keyEquivalent: ",")
         .target = target
+    app.addItem(withTitle: "Import ghostty config…", action: #selector(AppDelegate.importGhosttyConfig), keyEquivalent: "")
+        .target = target
     app.addItem(.separator())
     app.addItem(withTitle: "Hide Halo", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     let hideOthers = app.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")

@@ -151,25 +151,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
     }
 
-    /// Halo's settings ARE the ghostty config (halo-* keys). Open it in the user's editor.
+    /// Open the active config: Halo's own if imported, else the live ghostty config.
     @objc func openSettings() {
         let fm = FileManager.default
-        let home = NSHomeDirectory()
-        let candidates = [
-            "\(home)/.config/ghostty/config",
-            "\(home)/Library/Application Support/com.mitchellh.ghostty/config",
-        ]
-        if let existing = candidates.first(where: { fm.fileExists(atPath: $0) }) {
-            NSWorkspace.shared.open(URL(fileURLWithPath: existing)); return
+        let halo = haloConfigPath()
+        if fm.fileExists(atPath: halo) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: halo)); return
         }
-        // None exists yet — create the XDG one with a starter comment, then open it.
-        let path = candidates[0]
-        try? fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
+        if let ghostty = ghosttyConfigPath() {
+            NSWorkspace.shared.open(URL(fileURLWithPath: ghostty)); return
+        }
+        // Neither exists — create a starter Halo config and open it.
+        try? fm.createDirectory(atPath: (halo as NSString).deletingLastPathComponent,
                                 withIntermediateDirectories: true)
-        let starter = "# Halo reads your ghostty config. Add halo-* keys here.\n"
-            + "# e.g. halo-accent = #7dcfb6, halo-sidebar-width = 240\n"
-        try? starter.write(toFile: path, atomically: true, encoding: .utf8)
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        let starter = "# Halo config — ghostty keys + halo-* keys.\n"
+            + "# e.g. theme = ..., halo-accent = #7dcfb6, halo-sidebar-width = 240\n"
+        try? starter.write(toFile: halo, atomically: true, encoding: .utf8)
+        NSWorkspace.shared.open(URL(fileURLWithPath: halo))
+    }
+
+    /// Copy the live ghostty config into Halo's own config so it can be customized
+    /// independently. After this, Halo loads its own config (ghostty's stays put).
+    @objc func importGhosttyConfig() {
+        let fm = FileManager.default
+        guard let src = ghosttyConfigPath(), let text = try? String(contentsOfFile: src, encoding: .utf8) else {
+            let a = NSAlert()
+            a.messageText = "No ghostty config found"
+            a.informativeText = "Couldn't find ~/.config/ghostty/config to import from."
+            a.runModal(); return
+        }
+        let dst = haloConfigPath()
+        if fm.fileExists(atPath: dst) {
+            let a = NSAlert()
+            a.messageText = "Replace Halo config?"
+            a.informativeText = "This overwrites \(dst) with your ghostty config."
+            a.addButton(withTitle: "Replace"); a.addButton(withTitle: "Cancel")
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        try? fm.createDirectory(atPath: (dst as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let header = "# Imported from \(src).\n# This is Halo's own config — edit freely; your ghostty config is untouched.\n\n"
+        do {
+            try (header + text).write(toFile: dst, atomically: true, encoding: .utf8)
+            let a = NSAlert()
+            a.messageText = "Imported ghostty config"
+            a.informativeText = "Copied to \(dst). Relaunch Halo to apply, then edit it via Settings…"
+            a.addButton(withTitle: "OK"); a.runModal()
+        } catch {
+            let a = NSAlert(); a.messageText = "Import failed"; a.informativeText = error.localizedDescription; a.runModal()
+        }
     }
 
     @objc func showHelp() {

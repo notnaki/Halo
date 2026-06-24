@@ -86,12 +86,33 @@ private func readFile(_ path: String) -> String? {
     try? String(contentsOfFile: path, encoding: .utf8)
 }
 
+/// Halo's own config file (XDG). When present, Halo loads this instead of
+/// ghostty's so you can customize Halo independently — "Import ghostty config"
+/// seeds it. Absent ⇒ Halo keeps reading your live ghostty config (color sync).
+func haloConfigPath() -> String {
+    if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] {
+        return "\(xdg)/halo/config"
+    }
+    return "\(NSHomeDirectory())/.config/halo/config"
+}
+
+/// The ghostty config Halo would import from (first existing), or nil.
+func ghosttyConfigPath() -> String? {
+    let home = NSHomeDirectory()
+    var c: [String] = []
+    if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] { c.append("\(xdg)/ghostty/config") }
+    c.append("\(home)/.config/ghostty/config")
+    c.append("\(home)/Library/Application Support/com.mitchellh.ghostty/config")
+    return firstExisting(c)
+}
+
 func loadGhosttyConfig() -> (theme: Theme, settings: [String: String]) {
     let env = ProcessInfo.processInfo.environment
     let home = NSHomeDirectory()
     let xdg = env["XDG_CONFIG_HOME"]
 
-    var configCandidates: [String] = []
+    // Halo's own config wins when present, else fall back to ghostty's.
+    var configCandidates: [String] = [haloConfigPath()]
     if let xdg { configCandidates.append("\(xdg)/ghostty/config") }
     configCandidates.append("\(home)/.config/ghostty/config")
     configCandidates.append("\(home)/Library/Application Support/com.mitchellh.ghostty/config")

@@ -31,7 +31,12 @@ final class GhosttyApp {
         guard let cfg = ghostty_config_new() else {
             fatalError("ghostty_config_new failed")
         }
-        ghostty_config_load_default_files(cfg)
+        // Prefer Halo's own imported config; else load ghostty's default files.
+        if FileManager.default.fileExists(atPath: haloConfigPath()) {
+            haloConfigPath().withCString { ghostty_config_load_file(cfg, $0) }
+        } else {
+            ghostty_config_load_default_files(cfg)
+        }
         ghostty_config_finalize(cfg)
         self.config = cfg
 
