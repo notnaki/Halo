@@ -10,7 +10,7 @@ if argv.first == "selfcheck" {
     // GhosttyApp.shared). GhosttyApp.shared calls NSApp.isActive; NSApp is nil until
     // NSApplication.shared is first touched. Touch it here so GhosttyApp.shared doesn't crash.
     _ = NSApplication.shared
-    MainActor.assumeIsolated { chromeSelfCheck() }
+    MainActor.assumeIsolated { chromeSelfCheck(); prefixSpecSelfCheck() }
     print("all self-checks ok"); exit(0)
 }
 if let verb = argv.first, verb == "help" || verb == "--help" || verb == "-h" {

@@ -89,6 +89,77 @@ func resolvePrefix(_ key: String, in table: [String: PrefixAction]) -> PrefixAct
     table[key]
 }
 
+/// Parse the `halo-prefix` config value (e.g. "ctrl+b") into modifier flags + the
+/// trigger key (lowercased single char). Empty/whitespace → nil (prefix disabled).
+/// Recognized mod tokens: ctrl/control, alt/opt/option, shift, cmd/super/command.
+/// Defaults to ctrl+b when the key is absent but mods are present is NOT done —
+/// a malformed spec returns nil (prefix off) rather than guessing.
+func parsePrefixSpec(_ raw: String?) -> (mods: NSEvent.ModifierFlags, key: String)? {
+    guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+    let tokens = raw.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+    guard !tokens.isEmpty else { return nil }
+    var mods: NSEvent.ModifierFlags = []
+    var key: String? = nil
+    for tok in tokens {
+        switch tok {
+        case "ctrl", "control": mods.insert(.control)
+        case "alt", "opt", "option": mods.insert(.option)
+        case "shift": mods.insert(.shift)
+        case "cmd", "super", "command": mods.insert(.command)
+        default:
+            // The single trigger key. Last non-mod token wins; must be 1 char.
+            if tok.count == 1 { key = tok } else { key = nil }
+        }
+    }
+    guard let k = key, !mods.isEmpty else { return nil }   // require a real chord
+    return (mods, k)
+}
+
+/// The pending-state machine for prefix mode. Lives for the app's lifetime,
+/// owned by AppDelegate (Task 1.4). Not itself a view: it calls `onArmedChange`
+/// so the chrome can show/hide the indicator, and returns a resolved action from
+/// `handle(...)` for the caller to dispatch. Timeout auto-cancels so a stray
+/// prefix never traps the keyboard.
+@MainActor
+final class PrefixState {
+    private(set) var armed = false
+    private let timeout: TimeInterval
+    private var timer: Timer?
+
+    /// Called whenever `armed` flips, so chrome can show/hide the indicator.
+    var onArmedChange: ((Bool) -> Void)?
+
+    init(timeout: TimeInterval = 2.0) { self.timeout = timeout }
+
+    /// Arm the prefix (the user pressed the prefix chord). Starts the timeout.
+    func arm() {
+        armed = true
+        onArmedChange?(true)
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancel() }
+        }
+    }
+
+    /// Cancel the pending state (timeout, Escape, or an unbound key).
+    func cancel() {
+        guard armed else { return }
+        armed = false
+        timer?.invalidate(); timer = nil
+        onArmedChange?(false)
+    }
+
+    /// While armed, consume the next key: resolve it (and disarm), or cancel on a
+    /// nil resolve. `isEscape` short-circuits to a plain cancel. Returns the action
+    /// to dispatch, or nil if the key cancelled/was swallowed. Always disarms.
+    func handle(key: String, isEscape: Bool, table: [String: PrefixAction]) -> PrefixAction? {
+        guard armed else { return nil }
+        defer { cancel() }            // any consumed key disarms (cancel() flips indicator off)
+        if isEscape { return nil }
+        return resolvePrefix(key, in: table)
+    }
+}
+
 // MARK: - Self-check (pure logic: keytable parse + resolve)
 
 func prefixKeytableSelfCheck() {
@@ -142,4 +213,56 @@ func prefixKeytableSelfCheck() {
     assert(resolvePrefix("%", in: m) == .splitVertical, "malformed input leaves defaults intact")
 
     print("prefixKeytableSelfCheck OK")
+}
+
+// MARK: - Self-check (parsePrefixSpec + PrefixState transitions)
+
+@MainActor
+func prefixSpecSelfCheck() {
+    // nil / whitespace → disabled
+    assert(parsePrefixSpec(nil) == nil, "nil spec → disabled")
+    assert(parsePrefixSpec("  ") == nil, "whitespace spec → disabled")
+
+    // Valid chords parse to the right flags + key
+    let ctrlB = parsePrefixSpec("ctrl+b")
+    assert(ctrlB != nil, "ctrl+b should parse")
+    assert(ctrlB!.mods.contains(.control), "ctrl+b mods contains .control")
+    assert(ctrlB!.key == "b", "ctrl+b key == b")
+
+    let cmdA = parsePrefixSpec("cmd+a")
+    assert(cmdA != nil, "cmd+a should parse")
+    assert(cmdA!.mods.contains(.command), "cmd+a mods contains .command")
+    assert(cmdA!.key == "a", "cmd+a key == a")
+
+    // Malformed specs return nil
+    assert(parsePrefixSpec("b") == nil, "no-mod spec → nil")
+    assert(parsePrefixSpec("ctrl+esc") == nil, "multi-char key → nil")
+
+    // PrefixState transitions (synchronous — no timeout firing)
+    let ps = PrefixState()
+    assert(!ps.armed, "fresh PrefixState not armed")
+
+    ps.arm()
+    assert(ps.armed, "after arm() → armed == true")
+
+    // handle a bound key → resolves, then disarms
+    let action = ps.handle(key: "%", isEscape: false, table: defaultPrefixKeytable)
+    assert(action == .splitVertical, "% → splitVertical")
+    assert(!ps.armed, "after handle() → disarmed")
+
+    // Escape cancels, returns nil
+    ps.arm()
+    assert(ps.armed, "re-armed")
+    let escaped = ps.handle(key: "q", isEscape: true, table: defaultPrefixKeytable)
+    assert(escaped == nil, "escape → nil")
+    assert(!ps.armed, "after escape → disarmed")
+
+    // Unbound key cancels, returns nil
+    ps.arm()
+    assert(ps.armed, "re-armed for unbound test")
+    let unbound = ps.handle(key: "Z", isEscape: false, table: defaultPrefixKeytable)
+    assert(unbound == nil, "unbound key → nil")
+    assert(!ps.armed, "after unbound → disarmed")
+
+    print("prefixSpecSelfCheck ok")
 }
