@@ -1,0 +1,8 @@
+libvterm vendored sources
+=========================
+Upstream: libvterm 0.3.3 (MIT) by Paul "LeoNerd" Evans
+Source:   https://www.leonerd.org.uk/code/libvterm/libvterm-0.3.3.tar.gz
+SHA256:   09156f43dd2128bd347cbeebe50d9a571d32c64e0cf18d211197946aff7226e0
+Fetched:  2026-06-25 (canonical author host, over TLS)
+Scope:    src/*.c src/*.h src/*.inc src/encoding/ + include/vterm.h include/vterm_keycodes.h + LICENSE
+Excluded: bin/*.c (standalone tools with main()), t/ tests, Makefile, .pc.in
