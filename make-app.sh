@@ -1,0 +1,125 @@
+#!/bin/bash
+# Build Halo.app — a double-clickable bundle with the halo logo as its icon.
+# The binary is self-contained (ghostty is statically linked), so the bundle is
+# just: the executable + the SPM resource bundle + an .icns + Info.plist.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+CONF="${1:-release}"            # make-app.sh [release|debug]
+APP="Halo.app"
+BINDIR=".build/$CONF"
+
+echo ">> building ($CONF)..."
+swift build -c "$CONF" >/dev/null
+
+BIN="$BINDIR/halo"
+BUNDLE=$(ls -d "$BINDIR"/Halo_halo.bundle 2>/dev/null | head -1)
+[ -x "$BIN" ] || { echo "no binary at $BIN"; exit 1; }
+[ -d "$BUNDLE" ] || { echo "no resource bundle next to binary"; exit 1; }
+
+echo ">> compiling app icon..."
+ICONOUT=$(mktemp -d)
+# Prefer the Icon Composer document (AppIcon.icon) — actool renders its
+# liquid-glass treatment to AppIcon.icns + Assets.car. Fall back to the SVG.
+if [ -d AppIcon.icon ] && xcrun actool AppIcon.icon --compile "$ICONOUT" --app-icon AppIcon \
+     --platform macosx --minimum-deployment-target 26.0 \
+     --output-partial-info-plist "$ICONOUT/icon.plist" >/dev/null 2>&1 && [ -f "$ICONOUT/AppIcon.icns" ]; then
+  echo ">> rendered AppIcon.icon (Icon Composer)"
+else
+  echo "  WARN: actool failed; rendering icon from assets/halo-logo.svg"
+  ICONSET=$(mktemp -d)/Halo.iconset; mkdir -p "$ICONSET"
+  qlmanage -t -s 1024 -o /tmp assets/halo-logo.svg >/dev/null 2>&1
+  SRC=/tmp/halo-logo.svg.png
+  for s in 16 32 128 256 512; do
+    sips -z $s $s          "$SRC" --out "$ICONSET/icon_${s}x${s}.png"      >/dev/null
+    sips -z $((s*2)) $((s*2)) "$SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$ICONOUT/AppIcon.icns"
+fi
+
+echo ">> assembling ${APP}..."
+rm -rf "${APP}"
+mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+cp "$BIN" "${APP}/Contents/MacOS/Halo"
+# Resource bundle as DATA in Resources (Bundle.module also searches Bundle.main.resourceURL),
+# so codesign doesn't treat it as unsigned nested code.
+cp -R "$BUNDLE" "${APP}/Contents/Resources/"
+cp "$ICONOUT/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
+# Assets.car carries the high-res / liquid-glass icon variants (Tahoe reads it
+# via CFBundleIconName); harmless on older systems that use the .icns.
+[ -f "$ICONOUT/Assets.car" ] && cp "$ICONOUT/Assets.car" "${APP}/Contents/Resources/Assets.car"
+# Legal: ship the license + third-party attribution inside the bundle.
+cp LICENSE "${APP}/Contents/Resources/LICENSE" 2>/dev/null || true
+cp NOTICE  "${APP}/Contents/Resources/NOTICE"  2>/dev/null || true
+
+# ghostty's resources dir (themes/, for `theme = <name>` color sync). A Finder
+# launch doesn't inherit $GHOSTTY_RESOURCES_DIR, so bundle Halo's own vendored
+# copy (Resources/ghostty, committed to the repo). GhosttyApp points
+# GHOSTTY_RESOURCES_DIR at this bundled dir — no installed Ghostty required.
+GRES="Resources/ghostty"
+[ -d "$GRES/themes" ] || GRES="${GHOSTTY_RESOURCES_DIR:-/Applications/Ghostty.app/Contents/Resources/ghostty}"
+if [ -d "$GRES/themes" ]; then
+  cp -R "$GRES" "${APP}/Contents/Resources/ghostty"
+  echo ">> bundled ghostty resources (themes) from $GRES"
+else
+  echo "  WARN: no ghostty resources at $GRES — named themes won't resolve in the bundle"
+fi
+
+cat > "${APP}/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>            <string>Halo</string>
+  <key>CFBundleDisplayName</key>     <string>Halo</string>
+  <key>CFBundleExecutable</key>      <string>Halo</string>
+  <key>CFBundleIdentifier</key>      <string>dev.halo.terminal</string>
+  <key>CFBundleIconFile</key>        <string>AppIcon</string>
+  <key>CFBundleIconName</key>        <string>AppIcon</string>
+  <key>CFBundlePackageType</key>     <string>APPL</string>
+  <key>CFBundleShortVersionString</key> <string>0.1.0</string>
+  <key>CFBundleVersion</key>         <string>1</string>
+  <key>LSMinimumSystemVersion</key>  <string>13.0</string>
+  <key>NSHighResolutionCapable</key> <true/>
+  <key>NSPrincipalClass</key>        <string>NSApplication</string>
+  <key>LSApplicationCategoryType</key> <string>public.app-category.developer-tools</string>
+  <!-- open a folder in Halo: "Open With", `open -a Halo <dir>`, drag-to-icon -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>      <string>Folder</string>
+      <key>CFBundleTypeRole</key>      <string>Viewer</string>
+      <key>LSHandlerRank</key>         <string>Alternate</string>
+      <key>LSItemContentTypes</key>    <array><string>public.folder</string></array>
+    </dict>
+  </array>
+  <!-- Finder right-click > Services > New Halo Session Here -->
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>   <dict><key>default</key><string>New Halo Session Here</string></dict>
+      <key>NSMessage</key>    <string>newSessionHere</string>
+      <key>NSPortName</key>   <string>Halo</string>
+      <key>NSSendFileTypes</key> <array><string>public.folder</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
+
+# Sign the executable then the wrapper (no --deep — the resource bundle is data).
+# SIGN_ID set (e.g. "Developer ID Application: Name (TEAMID)") → real signing with
+# Hardened Runtime + entitlements (required for notarization). Else ad-hoc.
+ENT="$(dirname "$0")/Halo.entitlements"
+if [ -n "${SIGN_ID:-}" ]; then
+  codesign --force --options runtime --timestamp --entitlements "$ENT" \
+    --sign "$SIGN_ID" "${APP}/Contents/MacOS/Halo"
+  codesign --force --options runtime --timestamp --entitlements "$ENT" \
+    --sign "$SIGN_ID" "${APP}"
+  echo "OK: signed with Developer ID ($SIGN_ID)"
+else
+  codesign --force --sign - "${APP}/Contents/MacOS/Halo" >/dev/null 2>&1 || true
+  codesign --force --sign - "${APP}" >/dev/null 2>&1 && echo "OK: signed (ad-hoc)" || echo "  (codesign skipped)"
+fi
+
+echo "OK: built $APP — open with: open ${APP}"
