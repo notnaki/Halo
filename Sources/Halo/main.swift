@@ -149,7 +149,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+    // Closing the window does NOT quit Halo — the app keeps running (menu bar
+    // stays live); reopen via the Dock or ⌘N-style reactivation.
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
+
+    /// Dock-click / reactivation with no visible window → bring the window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return true
+    }
+
+    /// Confirm before quitting (⌘Q) — running sessions would be killed.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let a = NSAlert()
+        a.messageText = "Quit Halo?"
+        a.informativeText = "This closes all sessions and their running programs."
+        a.alertStyle = .warning
+        a.addButton(withTitle: "Quit Halo")
+        a.addButton(withTitle: "Cancel")
+        return a.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
 
     // MARK: - Menu actions
 
@@ -165,6 +187,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var settingsWC: SettingsWindowController?
 
+    /// Re-read the config and re-apply colors/theme/terminal settings live — no
+    /// relaunch. Pushes a fresh ghostty config to every surface and re-themes chrome.
+    @objc func reloadConfig() {
+        let t = GhosttyApp.shared.reloadConfig()
+        theme = t
+        workspace.applyTheme(t)
+        controller.applyTheme(t)
+        refresh()
+    }
+
     /// Open the native settings panel (⌘,).
     @objc func openSettings() {
         if settingsWC == nil {
@@ -172,7 +204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 theme: theme,
                 onSidebarWidth: { [weak self] w in self?.controller.setSidebarWidth(w) },
                 onImport: { [weak self] in self?.importGhosttyConfig() },
-                onOpenConfig: { [weak self] in self?.openConfigFile() })
+                onOpenConfig: { [weak self] in self?.openConfigFile() },
+                onReload: { [weak self] in self?.reloadConfig() })
         }
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)
@@ -218,13 +251,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard a.runModal() == .alertFirstButtonReturn else { return }
         }
         try? fm.createDirectory(atPath: (dst as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        let header = "# Imported from \(src).\n# This is Halo's own config — edit freely; your ghostty config is untouched.\n\n"
+        // Import only the SETTINGS: parse the key=value pairs and rewrite them under
+        // a Halo header, dropping ghostty's template comments/boilerplate. So the
+        // file reads as Halo's own, not a ghostty config.
+        let pairs = parseGhosttyConfig(text)
+        let header = "# Halo config — your own copy. Any ghostty key works, plus halo-* keys.\n"
+            + "# Imported from your ghostty settings; edit freely (ghostty's config is untouched).\n\n"
+        let body = pairs.map { "\($0.0) = \($0.1)" }.joined(separator: "\n") + "\n"
         do {
-            try (header + text).write(toFile: dst, atomically: true, encoding: .utf8)
+            try (header + body).write(toFile: dst, atomically: true, encoding: .utf8)
             let a = NSAlert()
-            a.messageText = "Imported ghostty config"
-            a.informativeText = "Copied to \(dst). Relaunch Halo to apply, then edit it via Settings…"
-            a.addButton(withTitle: "OK"); a.runModal()
+            a.messageText = "Imported \(pairs.count) settings"
+            a.informativeText = "Saved to your Halo config. Apply now?"
+            a.addButton(withTitle: "Reload"); a.addButton(withTitle: "Later")
+            if a.runModal() == .alertFirstButtonReturn { reloadConfig() }
         } catch {
             let a = NSAlert(); a.messageText = "Import failed"; a.informativeText = error.localizedDescription; a.runModal()
         }

@@ -6,3 +6,8 @@
 # built app bundle (use ./make-app.sh)
 Halo.app/
 *.app/
+
+# local-only build/dev artifacts (root-anchored so Sources/Halo/Resources stays tracked)
+/Resources/
+/mockup.html
+/make-app.sh

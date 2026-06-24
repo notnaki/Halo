@@ -16,6 +16,17 @@ import GhosttyKit
     /// on the main thread for an NSView anyway.
     private nonisolated(unsafe) var surface: ghostty_surface_t?
 
+    /// Live-pane registry. ghostty's action/close callbacks hand us a raw userdata
+    /// pointer and we resolve it on a later main-queue hop — by which point the
+    /// pane may have been closed (Cmd-W), so the pointer would dangle. Callbacks
+    /// check `isLive` first; init/deinit keep the set current. NSLock because
+    /// deinit isn't guaranteed on the main actor.
+    private nonisolated static let liveLock = NSLock()
+    private nonisolated(unsafe) static var live = Set<UnsafeMutableRawPointer>()
+    nonisolated static func isLive(_ p: UnsafeMutableRawPointer) -> Bool {
+        liveLock.lock(); defer { liveLock.unlock() }; return live.contains(p)
+    }
+
     /// Marked (preedit) text accumulator for IME, and a keyDown text accumulator.
     private let markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
@@ -50,11 +61,22 @@ import GhosttyKit
 
         // Tracking area so we receive mouseMoved/entered/exited.
         updateTrackingAreas()
+
+        let p = Unmanaged.passUnretained(self).toOpaque()
+        TerminalPane.liveLock.lock(); TerminalPane.live.insert(p); TerminalPane.liveLock.unlock()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
     deinit {
+        let p = Unmanaged.passUnretained(self).toOpaque()
+        TerminalPane.liveLock.lock(); TerminalPane.live.remove(p); TerminalPane.liveLock.unlock()
         if let surface { ghostty_surface_free(surface) }
+    }
+
+    /// Push a freshly-loaded config to this surface (live reload, no relaunch).
+    func updateConfig(_ cfg: ghostty_config_t) {
+        guard let surface else { return }
+        ghostty_surface_update_config(surface, cfg)
     }
 
     // MARK: - Public API (contract)

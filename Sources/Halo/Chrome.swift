@@ -7,10 +7,10 @@ import AppKit
 @MainActor
 final class HaloWindowController: NSWindowController {
 
-    private let theme: Theme
+    private var theme: Theme
 
     // one near-uniform surface tone — from ghostty `background` / `halo-surface`
-    private let surface: NSColor
+    private var surface: NSColor
 
     // hairline alphas straight from the mockup tokens
     private func hair(_ a: CGFloat = 0.07) -> NSColor { NSColor(white: 1, alpha: a) }
@@ -82,6 +82,9 @@ final class HaloWindowController: NSWindowController {
         win.titleVisibility = .hidden
         win.backgroundColor = surface
         win.isMovableByWindowBackground = false
+        // Keep the window object alive when the user closes it, so the app can
+        // re-show it (closing the window doesn't quit Halo).
+        win.isReleasedWhenClosed = false
         win.center()
         // Remember window size/position across launches (falls back to centered).
         win.setFrameAutosaveName("HaloMainWindow")
@@ -96,6 +99,15 @@ final class HaloWindowController: NSWindowController {
     required init?(coder: NSCoder) { fatalError("no xib") }
 
     // MARK: public updates
+
+    /// Live config reload (no relaunch): adopt new colors. Sidebar rows rebuild
+    /// with the new accent on the next setProjects() (the caller's refresh()).
+    func applyTheme(_ t: Theme) {
+        theme = t
+        surface = t.background
+        window?.backgroundColor = surface
+        sidebar?.layer?.backgroundColor = surface.cgColor
+    }
 
     func setStatus(_ text: String) { footer?.stringValue = text }
     func setDir(_ text: String) {

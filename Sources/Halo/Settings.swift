@@ -8,15 +8,18 @@ final class SettingsWindowController: NSWindowController {
     private let onSidebarWidth: (CGFloat) -> Void
     private let onImport: () -> Void
     private let onOpenConfig: () -> Void
+    private let onReload: () -> Void
     private var configView: NSTextView?   // full-config editor (any ghostty key)
 
     init(theme: Theme,
          onSidebarWidth: @escaping (CGFloat) -> Void,
          onImport: @escaping () -> Void,
-         onOpenConfig: @escaping () -> Void) {
+         onOpenConfig: @escaping () -> Void,
+         onReload: @escaping () -> Void) {
         self.onSidebarWidth = onSidebarWidth
         self.onImport = onImport
         self.onOpenConfig = onOpenConfig
+        self.onReload = onReload
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 600),
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.title = "Halo Settings"
@@ -51,7 +54,7 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(row("Divider width",
             slider(Double(cfg.dividerWidth), 1, 14, #selector(dividerChanged(_:)))))
 
-        let note = NSTextField(labelWithString: "Sidebar width applies now; colors, font, and divider apply on relaunch.")
+        let note = NSTextField(labelWithString: "Sidebar width applies live; click Reload to apply colors, fonts, theme, and any edited config.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor
         note.lineBreakMode = .byWordWrapping; note.preferredMaxLayoutWidth = 340
         stack.addArrangedSubview(note)
@@ -59,7 +62,7 @@ final class SettingsWindowController: NSWindowController {
         let btns = NSStackView(views: [
             button("Import ghostty config", #selector(importTapped)),
             button("Open config file", #selector(openTapped)),
-            button("Relaunch", #selector(relaunchTapped)),
+            button("Reload", #selector(reloadTapped)),
         ])
         btns.orientation = .horizontal; btns.spacing = 8
         stack.addArrangedSubview(btns)
@@ -143,21 +146,10 @@ final class SettingsWindowController: NSWindowController {
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try? text.write(toFile: path, atomically: true, encoding: .utf8)
 
-        let a = NSAlert()
-        a.messageText = "Config saved"
-        a.informativeText = "Relaunch Halo to apply the changes?"
-        a.addButton(withTitle: "Relaunch")
-        a.addButton(withTitle: "Later")
-        if a.runModal() == .alertFirstButtonReturn { relaunchTapped() }
+        onReload()
     }
 
     @objc private func importTapped() { onImport() }
     @objc private func openTapped()   { onOpenConfig() }
-    @objc private func relaunchTapped() {
-        let p = Bundle.main.bundlePath
-        if p.hasSuffix(".app") {
-            Process.launchedProcess(launchPath: "/usr/bin/open", arguments: ["-n", p])
-        }
-        NSApp.terminate(nil)
-    }
+    @objc private func reloadTapped() { onReload() }
 }

@@ -49,7 +49,7 @@ final class Workspace {
 
     let container = NSView()
     private let body = NSView()
-    private let theme: Theme
+    private var theme: Theme
 
     // Callbacks (set by AppDelegate, invoked by Chrome in Task B)
     var onSelectSession:  ((Int, Int) -> Void)?
@@ -448,6 +448,14 @@ final class Workspace {
 
     /// Focus the active session's pane (call after the window becomes key at launch).
     func focusActive() { activeTree.focusActivePane() }
+
+    /// Live config reload (no relaunch): re-theme every session's panes and adopt
+    /// the new theme for sessions created afterwards.
+    func applyTheme(_ t: Theme) {
+        theme = t
+        container.layer?.backgroundColor = t.background.cgColor
+        for p in projs { for s in p.sessions { s.applyTheme(t) } }
+    }
 
     private func handleChange() {
         onChange?()

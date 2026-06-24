@@ -48,11 +48,17 @@ final class PaneTree {
             addSubview(overlay)
         }
         required init?(coder: NSCoder) { fatalError() }
+
+        /// Re-apply colors on a live config reload (no relaunch).
+        func applyTheme(accent: NSColor, surface: NSColor) {
+            layer?.backgroundColor = surface.cgColor
+            overlay.accent = accent
+        }
     }
 
     /// Draws four ~9px corner ticks (1.5px) in accent when focused.
     private final class FocusOverlay: NSView {
-        let accent: NSColor
+        var accent: NSColor { didSet { needsDisplay = true } }
         var focused = false { didSet { needsDisplay = true } }
         init(accent: NSColor) {
             self.accent = accent
@@ -315,6 +321,18 @@ final class PaneTree {
             if on { l.content.focusContent() }
         }
         onFocusChange?()
+    }
+
+    /// Re-apply a reloaded theme/config to this session's panes (no relaunch):
+    /// chrome colors on the leaves, fresh config to each terminal surface.
+    func applyTheme(_ t: Theme) {
+        theme = t
+        root.layer?.backgroundColor = t.background.cgColor
+        for l in leaves {
+            l.applyTheme(accent: t.accent, surface: t.background)
+            (l.content as? TerminalPane)?.updateConfig(GhosttyApp.shared.config)
+        }
+        restyle()
     }
 
     /// Make the focused pane the window's first responder so typing works without

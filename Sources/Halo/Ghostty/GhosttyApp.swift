@@ -11,7 +11,7 @@ final class GhosttyApp {
     static let shared = GhosttyApp()
 
     let app: ghostty_app_t
-    let config: ghostty_config_t
+    private(set) var config: ghostty_config_t
 
     /// Colors derived from the loaded config (background/foreground/cursor/
     /// palette) plus the halo-* accent.
@@ -32,18 +32,12 @@ final class GhosttyApp {
         // argc/argv; we pass our real process arguments.
         _ = ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv)
 
-        // Build the configuration from the user's real ghostty config files.
-        // new -> load defaults -> finalize is the native config sync.
-        guard let cfg = ghostty_config_new() else {
-            fatalError("ghostty_config_new failed")
+        // Build the configuration from the user's real ghostty config files
+        // (native config sync). A bad config file doesn't fail this — libghostty
+        // keeps defaults for unparseable keys — so the only failure is allocation.
+        guard let cfg = GhosttyApp.loadConfig() else {
+            GhosttyApp.die("Couldn't initialize the terminal configuration.")
         }
-        // Prefer Halo's own imported config; else load ghostty's default files.
-        if FileManager.default.fileExists(atPath: haloConfigPath()) {
-            haloConfigPath().withCString { ghostty_config_load_file(cfg, $0) }
-        } else {
-            ghostty_config_load_default_files(cfg)
-        }
-        ghostty_config_finalize(cfg)
         self.config = cfg
 
         // Derive theme colors from the finalized config, and read halo-* keys
@@ -77,7 +71,7 @@ final class GhosttyApp {
         // No app-level userdata needed: wakeup routes through the singleton, and
         // surface actions resolve via the surface's own userdata.
         guard let app = ghostty_app_new(&runtime, cfg) else {
-            fatalError("ghostty_app_new failed")
+            GhosttyApp.die("Couldn't start the terminal engine (libghostty).")
         }
         self.app = app
 
@@ -93,10 +87,55 @@ final class GhosttyApp {
         if let dir = ghosttyResourcesDir() { setenv("GHOSTTY_RESOURCES_DIR", dir, 1) }
     }
 
+    /// Show a fatal-error alert (instead of a silent crash) and exit cleanly.
+    private static func die(_ message: String) -> Never {
+        let a = NSAlert()
+        a.messageText = "Halo can't start"
+        a.informativeText = message + "\n\nCheck your config (Halo ▸ Settings…) and try again."
+        a.alertStyle = .critical
+        a.runModal()
+        exit(1)
+    }
+
     // MARK: - Ticking
 
     /// Drive libghostty forward. Must run on the main actor.
     func tick() { ghostty_app_tick(app) }
+
+    // MARK: - Live reload
+
+    /// Build a fresh ghostty_config_t from Halo's config files (the native
+    /// config sync: new → load → finalize). Returns nil only if allocation fails.
+    private static func loadConfig() -> ghostty_config_t? {
+        guard let cfg = ghostty_config_new() else { return nil }
+        if FileManager.default.fileExists(atPath: haloConfigPath()) {
+            haloConfigPath().withCString { ghostty_config_load_file(cfg, $0) }
+        } else {
+            ghostty_config_load_default_files(cfg)
+        }
+        ghostty_config_finalize(cfg)
+        return cfg
+    }
+
+    /// Re-read the config and re-derive the theme WITHOUT relaunching. The app's
+    /// config is swapped and pushed to libghostty; callers then push the returned
+    /// theme through the chrome and call `TerminalPane.updateConfig` per surface.
+    @discardableResult
+    func reloadConfig() -> Theme {
+        guard let cfg = GhosttyApp.loadConfig() else { return theme }
+        let old = config
+        config = cfg
+        ghostty_app_update_config(app, cfg)
+
+        let parsed = loadGhosttyConfig()
+        settings = parsed.settings
+        let hc = HaloConfig(parsed.settings)
+        var t = GhosttyApp.makeTheme(config: cfg, accent: hc.accent ?? parsed.theme.accent)
+        if let s = hc.surface { t.background = s }
+        theme = t
+        ghostty_config_free(old)
+        return t
+    }
 
     // MARK: - Theme
 
@@ -174,6 +213,7 @@ final class GhosttyApp {
             nonisolated(unsafe) let udSafe2 = ud
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    guard TerminalPane.isLive(udSafe2) else { return }   // pane may have closed
                     Unmanaged<TerminalPane>.fromOpaque(udSafe2).takeUnretainedValue().fireAttention()
                 }
             }
@@ -185,6 +225,7 @@ final class GhosttyApp {
         nonisolated(unsafe) let udSafe = ud   // raw pointer, resolved on main
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
+                guard TerminalPane.isLive(udSafe) else { return }   // pane may have closed
                 let pane = Unmanaged<TerminalPane>.fromOpaque(udSafe).takeUnretainedValue()
                 if let newTitle { pane.setLiveTitle(newTitle) }
                 if let newPwd { pane.setLiveCwd(newPwd) }

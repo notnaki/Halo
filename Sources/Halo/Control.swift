@@ -69,6 +69,9 @@ final class ControlServer: @unchecked Sendable {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, len) }
         }
         guard bound == 0, listen(fd, 8) == 0 else { close(fd); return }
+        // Owner-only: this socket can inject keystrokes (send-keys) and read
+        // scrollback (capture), so no other local user may connect to it.
+        chmod(path, 0o600)
         listenFD = fd
         while true {
             let conn = accept(fd, nil, nil)

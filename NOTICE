@@ -1,0 +1,31 @@
+Halo
+Copyright (c) 2026 Nuh Naci Kusculu
+
+This product is built on libghostty and bundles or statically links the
+following third-party components. Their licenses and copyright notices are
+reproduced here as required.
+
+--------------------------------------------------------------------------------
+Ghostty (libghostty) and its bundled resources (themes, shell integration)
+  Copyright (c) 2024 Mitchell Hashimoto and the Ghostty contributors
+  License: MIT
+  https://github.com/ghostty-org/ghostty
+
+libghostty statically links, among others:
+  - libpng   — PNG Reference Library License (libpng)
+  - wuffs    — MIT / Apache-2.0
+  - simdutf  — MIT / Apache-2.0
+  Their notices travel with the libghostty binary they are linked into.
+
+--------------------------------------------------------------------------------
+Bundled fonts (SIL Open Font License 1.1)
+  Geist Mono   — Copyright (c) 2023 Vercel, Inc.
+  Martian Mono — Copyright (c) 2018 Evil Martians
+
+  This Font Software is licensed under the SIL Open Font License, Version 1.1.
+  The full OFL 1.1 text is available at: https://openfontlicense.org
+
+--------------------------------------------------------------------------------
+The "Ghostty" name and marks are property of their respective owners. Halo is
+an independent project that uses libghostty; it is not affiliated with or
+endorsed by the Ghostty project.
