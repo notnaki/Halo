@@ -453,6 +453,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.controller.window?.performClose(nil)  // 3) last one → close the window
                 }
                 return nil
+            // ⌘F: in-terminal search (⌃⌘F is full screen — let that fall through)
+            case "f" where !e.modifierFlags.contains(.control):
+                self.workspace.activeTree.focused?.startSearch(); return nil
             // ⌘B: toggle sidebar
             case "b":  self.controller.toggleSidebar(); return nil
             // ⌘]/⌘[: focus next/prev pane within the active session

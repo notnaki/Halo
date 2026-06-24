@@ -315,6 +315,14 @@ final class PaneTree {
             self.onFocusChange?()
         }
         pane.onAttention = { [weak self] in self?.onAttention?() }
+        // Multiplexed search: a query/clear from any pane's search bar fans out to
+        // every terminal pane in this session, so matches highlight across the split.
+        pane.broadcastSearch = { [weak self] q in
+            self?.leaves.forEach { ($0.content as? TerminalPane)?.applySearchNeedle(q) }
+        }
+        pane.broadcastEndSearch = { [weak self] in
+            self?.leaves.forEach { ($0.content as? TerminalPane)?.endSearchHere() }
+        }
         let l = Leaf(id: id, content: pane, accent: theme.accent, surface: theme.background)
         leaves.append(l)
         return l

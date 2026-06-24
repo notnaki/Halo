@@ -172,6 +172,9 @@ final class ControlServer: @unchecked Sendable {
         case "reload":
             onReload?()
             return ["ok": true]
+        case "search":
+            workspace.activeTree.focused?.search(args.first ?? "")
+            return ["ok": true]
         default:
             return ["ok": false, "error": "unknown cmd: \(cmd)"]
         }

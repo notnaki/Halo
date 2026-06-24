@@ -4,7 +4,7 @@ import GhosttyKit
 /// One terminal pane: a real libghostty surface rendered (via Metal) into this
 /// layer-backed NSView. The rest of Halo talks only to this type, never to the
 /// renderer. Adapted from Ghostty's own SurfaceView_AppKit.swift (MIT).
-@MainActor final class TerminalPane: NSView, @preconcurrency NSTextInputClient, PaneContent {
+@MainActor final class TerminalPane: NSView, @preconcurrency NSTextInputClient, NSTextFieldDelegate, PaneContent {
     private(set) var id: Int
     private(set) var cwd: String?          // from ghostty PWD action (OSC 7)
     private(set) var title: String = ""    // from ghostty SET_TITLE action (OSC 0/2)
@@ -132,6 +132,114 @@ import GhosttyKit
         name.withCString { ghostty_surface_binding_action(surface, $0, UInt(name.utf8.count)) }
     }
     @objc func copy(_ sender: Any?)  { bindingAction("copy_to_clipboard") }   // no-op if no selection
+
+    // MARK: - In-terminal search (⌘F)
+    // Halo provides the input field; libghostty runs the search and highlights
+    // matches in the grid, reporting match counts via SEARCH_TOTAL/SEARCH_SELECTED.
+
+    private var searchBar: NSStackView?
+    private var searchInput: NSTextField?
+    private var searchCount: NSTextField?
+    private var searchTotal = 0
+    private var searchSelected = -1
+    /// Multiplexed search: set by PaneTree to fan the query/clear out to every pane
+    /// in the session, so matches highlight across the whole split — not just here.
+    var broadcastSearch: ((String) -> Void)?
+    var broadcastEndSearch: (() -> Void)?
+
+    /// Apply a search needle to THIS surface only (libghostty highlights its matches).
+    func applySearchNeedle(_ q: String) { bindingAction("search:" + q) }
+    func endSearchHere() { bindingAction("end_search") }
+
+    /// Open the search field (⌘F).
+    func startSearch() {
+        if searchBar == nil { buildSearchBar() }
+        searchBar?.isHidden = false
+        bindingAction("start_search")
+        window?.makeFirstResponder(searchInput)
+    }
+
+    /// Open search pre-filled with `needle` and run it (for the `halo search` CLI).
+    func search(_ needle: String) {
+        startSearch()
+        searchInput?.stringValue = needle
+        runSearch()
+    }
+
+    private func buildSearchBar() {
+        let input = NSTextField()
+        input.placeholderString = "Find"
+        input.delegate = self
+        input.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        input.focusRingType = .none
+        input.widthAnchor.constraint(equalToConstant: 180).isActive = true
+
+        let count = NSTextField(labelWithString: "")
+        count.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        count.textColor = .secondaryLabelColor
+        count.widthAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
+
+        let close = NSButton(title: "✕", target: self, action: #selector(closeSearchTapped))
+        close.isBordered = false
+        close.font = .systemFont(ofSize: 11)
+
+        let bar = NSStackView(views: [input, count, close])
+        bar.orientation = .horizontal; bar.spacing = 8
+        bar.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 8)
+        bar.wantsLayer = true
+        bar.layer?.backgroundColor = NSColor(white: 0.13, alpha: 0.97).cgColor
+        bar.layer?.cornerRadius = 8
+        bar.layer?.borderWidth = 1
+        bar.layer?.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+        ])
+        searchBar = bar; searchInput = input; searchCount = count
+    }
+
+    @objc private func closeSearchTapped() { endSearch() }
+
+    func endSearch() {
+        if let b = broadcastEndSearch { b() } else { endSearchHere() }
+        searchBar?.isHidden = true
+        searchInput?.stringValue = ""
+        searchTotal = 0; searchSelected = -1
+        window?.makeFirstResponder(self)
+    }
+
+    private func runSearch() {
+        let q = searchInput?.stringValue ?? ""
+        if let b = broadcastSearch { b(q) } else { applySearchNeedle(q) }
+        if q.isEmpty { searchTotal = 0; searchSelected = -1; updateSearchCount() }
+    }
+
+    func setSearchTotal(_ t: Int)    { searchTotal = t; updateSearchCount() }
+    func setSearchSelected(_ s: Int) { searchSelected = s; updateSearchCount() }
+    private func updateSearchCount() {
+        guard let label = searchCount else { return }
+        if (searchInput?.stringValue ?? "").isEmpty { label.stringValue = "" }
+        else if searchTotal == 0 { label.stringValue = "no matches" }
+        else if searchSelected >= 0 { label.stringValue = "\(searchSelected + 1)/\(searchTotal)" }
+        else { label.stringValue = "\(searchTotal)" }
+    }
+
+    // NSTextFieldDelegate: live query + enter/escape navigation.
+    func controlTextDidChange(_ obj: Notification) { runSearch() }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        switch sel {
+        case #selector(insertNewline(_:)):
+            let prev = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
+            bindingAction(prev ? "navigate_search:previous" : "navigate_search:next")
+            return true
+        case #selector(cancelOperation(_:)):
+            endSearch(); return true
+        default:
+            return false
+        }
+    }
     @objc func paste(_ sender: Any?) {
         // Insert clipboard text directly via the surface (bracketed paste) — more
         // reliable than the binding action, and correct (multi-line won't auto-run).

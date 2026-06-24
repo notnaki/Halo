@@ -219,6 +219,22 @@ final class GhosttyApp {
                 }
             }
             return true
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            let total = Int(action.action.search_total.total)
+            nonisolated(unsafe) let u = ud
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                guard TerminalPane.isLive(u) else { return }
+                Unmanaged<TerminalPane>.fromOpaque(u).takeUnretainedValue().setSearchTotal(total)
+            }}
+            return true
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            let sel = Int(action.action.search_selected.selected)
+            nonisolated(unsafe) let u = ud
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                guard TerminalPane.isLive(u) else { return }
+                Unmanaged<TerminalPane>.fromOpaque(u).takeUnretainedValue().setSearchSelected(sel)
+            }}
+            return true
         default:
             return false
         }
