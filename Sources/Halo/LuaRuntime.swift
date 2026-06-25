@@ -18,6 +18,7 @@ nonisolated(unsafe) var luaPluginSpecs: [String] = []                 // declare
 nonisolated(unsafe) var luaControl: (String, [String]) -> [String: Any] = { _, _ in [:] }  // halo.cmd → control dispatch
 nonisolated(unsafe) var luaScheduleTimer: (Double, Int32) -> Void = { _, _ in }            // halo.timer
 nonisolated(unsafe) var luaClearTimers: () -> Void = {}                                     // reset on reload
+nonisolated(unsafe) var luaShowPicker: ([String], Int32) -> Void = { _, _ in }             // halo.pick
 
 // Pop the function at stack slot 2 into the registry and return its ref (for on/command/bind).
 private func refFunctionArg2(_ L: OpaquePointer?) -> Int32 {
@@ -94,6 +95,31 @@ private func l_halo_timer(_ L: OpaquePointer?) -> Int32 {
     return 0
 }
 
+/// halo.pick(items, fn) — show a filterable picker; fn(chosen) runs on selection. The
+/// fn ref is one-shot (freed after choose/cancel via luaUnref).
+private func l_halo_pick(_ L: OpaquePointer?) -> Int32 {
+    luaL_checktype(L, 1, halo_lua_ttable())
+    let len = Int(lua_rawlen(L, 1))
+    var items: [String] = []
+    if len > 0 {
+        for i in 1...len {
+            lua_rawgeti(L, 1, lua_Integer(i))
+            if let c = lua_tolstring(L, -1, nil) { items.append(String(cString: c)) }
+            lua_settop(L, -2)
+        }
+    }
+    luaL_checktype(L, 2, halo_lua_tfunction())
+    lua_pushvalue(L, 2)
+    let ref = luaL_ref(L, halo_lua_registryindex())
+    luaShowPicker(items, ref)
+    return 0
+}
+
+/// Free a one-shot registry ref (halo.pick callbacks after they fire/cancel).
+func luaUnref(_ ref: Int32) {
+    if let L = luaState { luaL_unref(L, halo_lua_registryindex(), ref) }
+}
+
 /// git-clone a plugin (run off-main). `spec` is "owner/repo" (→ GitHub) or a full URL.
 func gitClonePlugin(_ spec: String, to dir: String) -> Bool {
     let url = (spec.hasPrefix("http") || spec.hasPrefix("git@")) ? spec : "https://github.com/\(spec).git"
@@ -168,6 +194,7 @@ final class LuaRuntime {
         reg("plugin",  l_halo_plugin)
         reg("cmd",     l_halo_cmd)
         reg("timer",   l_halo_timer)
+        reg("pick",    l_halo_pick)
         lua_setglobal(L, "halo")
         runPrelude()   // convenience wrappers over halo.cmd
         runInit()

@@ -95,6 +95,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for w in windows where w !== key { w.workspace.reconcile(preferLive: false) }
     }
 
+    /// Show a `halo.pick` picker overlay in the key window; call the Lua ref with the
+    /// chosen item (or just dismiss + free the ref on cancel).
+    func showPicker(_ items: [String], _ ref: Int32) {
+        guard let host = active?.controller.window?.contentView,
+              !host.subviews.contains(where: { $0 is PickerOverlay }) else { luaUnref(ref); return }
+        let dismiss = { [weak host] in host?.subviews.compactMap { $0 as? PickerOverlay }.forEach { $0.removeFromSuperview() } }
+        let overlay = PickerOverlay(theme: theme, items: items,
+            onChoose: { item in dismiss(); luaCall(ref: ref, stringArg: item); luaUnref(ref) },
+            onCancel: { dismiss(); luaUnref(ref) })
+        overlay.frame = host.bounds
+        overlay.autoresizingMask = [.width, .height]
+        host.addSubview(overlay)
+        active?.controller.window?.makeFirstResponder(overlay)
+    }
+
     /// Show `msg` as a transient toast banner in the key window (what `halo.notify` calls).
     /// In-app so it's visible even under `swift run` (macOS notifications need a signed
     /// bundle). Falls back to stderr when there's no window. Uses the theme accent — no
@@ -232,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.luaTimers.append(t)
         }
         luaClearTimers = { [weak self] in self?.luaTimers.forEach { $0.invalidate() }; self?.luaTimers.removeAll() }
+        luaShowPicker = { [weak self] items, ref in self?.showPicker(items, ref) }
         LuaRuntime.shared.start()   // embedded Lua: run ~/.config/halo/init.lua
 
         installKeybinds()
