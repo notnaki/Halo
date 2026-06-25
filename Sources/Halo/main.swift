@@ -53,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var restoring = false
     private var savePending = false
     private var luaTimers: [Timer] = []   // halo.timer schedules; cleared on reload
+    private var luaPanels: [Int: PanelOverlay] = [:]   // halo.panel; cleared on reload
+    private var luaPanelCounter = 0
 
     /// Create, show, and track a new window. ⌘N / first launch.
     @discardableResult
@@ -108,6 +110,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dismiss = { [weak host] in host?.subviews.compactMap { $0 as? PickerOverlay }.forEach { $0.removeFromSuperview() } }
         let overlay = PickerOverlay(theme: theme, items: items,
             onChoose: { item in dismiss(); luaCall(ref: ref, stringArg: item); luaUnref(ref) },
+            onCancel: { dismiss(); luaUnref(ref) })
+        overlay.frame = host.bounds
+        overlay.autoresizingMask = [.width, .height]
+        host.addSubview(overlay)
+        active?.controller.window?.makeFirstResponder(overlay)
+    }
+
+    /// halo.panel: create (id 0) or update (existing id) a plugin panel in the key window.
+    /// Returns the panel id. Corner is fixed at creation.
+    func luaPanelSet(_ lines: [String], _ title: String, _ corner: String, _ id: Int) -> Int {
+        if id > 0, let panel = luaPanels[id] { panel.update(title: title, lines: lines); return id }
+        guard let host = active?.controller.window?.contentView else { return 0 }
+        let c = PanelOverlay.Corner(rawValue: corner) ?? .topright
+        let panel = PanelOverlay(theme: theme, title: title, lines: lines, corner: c)
+        host.addSubview(panel)
+        panel.pin(into: host)
+        luaPanelCounter += 1
+        luaPanels[luaPanelCounter] = panel
+        return luaPanelCounter
+    }
+
+    /// halo.prompt: free-text input overlay; call the Lua ref with the typed text (or free
+    /// the ref on cancel).
+    func showPrompt(_ message: String, _ ref: Int32) {
+        guard let host = active?.controller.window?.contentView,
+              !host.subviews.contains(where: { $0 is PickerOverlay }) else { luaUnref(ref); return }
+        let dismiss = { [weak host] in host?.subviews.compactMap { $0 as? PickerOverlay }.forEach { $0.removeFromSuperview() } }
+        let overlay = PickerOverlay(theme: theme, prompt: message,
+            onSubmit: { text in dismiss(); luaCall(ref: ref, stringArg: text); luaUnref(ref) },
             onCancel: { dismiss(); luaUnref(ref) })
         overlay.frame = host.bounds
         overlay.autoresizingMask = [.width, .height]
@@ -254,6 +285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         luaClearTimers = { [weak self] in self?.luaTimers.forEach { $0.invalidate() }; self?.luaTimers.removeAll() }
         luaShowPicker = { [weak self] items, ref in self?.showPicker(items, ref) }
         luaSetStatus = { [weak self] s in self?.windows.forEach { $0.controller.setLuaStatus(s) } }
+        luaPanel = { [weak self] lines, title, corner, id in self?.luaPanelSet(lines, title, corner, id) ?? 0 }
+        luaClosePanel = { [weak self] id in self?.luaPanels[id]?.removeFromSuperview(); self?.luaPanels[id] = nil }
+        luaClearPanels = { [weak self] in self?.luaPanels.values.forEach { $0.removeFromSuperview() }; self?.luaPanels.removeAll() }
+        luaShowPrompt = { [weak self] msg, ref in self?.showPrompt(msg, ref) }
         LuaRuntime.shared.start()   // embedded Lua: run ~/.config/halo/init.lua
 
         installKeybinds()

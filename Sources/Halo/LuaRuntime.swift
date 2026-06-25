@@ -20,6 +20,10 @@ nonisolated(unsafe) var luaScheduleTimer: (Double, Int32) -> Void = { _, _ in } 
 nonisolated(unsafe) var luaClearTimers: () -> Void = {}                                     // reset on reload
 nonisolated(unsafe) var luaShowPicker: ([String], Int32) -> Void = { _, _ in }             // halo.pick
 nonisolated(unsafe) var luaSetStatus: (String) -> Void = { _ in }                          // halo.status
+nonisolated(unsafe) var luaPanel: ([String], String, String, Int) -> Int = { _, _, _, _ in 0 }  // halo.panel → id
+nonisolated(unsafe) var luaClosePanel: (Int) -> Void = { _ in }                            // halo.close
+nonisolated(unsafe) var luaClearPanels: () -> Void = {}                                     // reset on reload
+nonisolated(unsafe) var luaShowPrompt: (String, Int32) -> Void = { _, _ in }               // halo.prompt
 
 // Pop the function at stack slot 2 into the registry and return its ref (for on/command/bind).
 private func refFunctionArg2(_ L: OpaquePointer?) -> Int32 {
@@ -125,6 +129,46 @@ func luaUnref(_ ref: Int32) {
     if let L = luaState { luaL_unref(L, halo_lua_registryindex(), ref) }
 }
 
+/// Read a Lua array (table) of strings at stack `idx`.
+private func luaStringArray(_ L: OpaquePointer?, _ idx: Int32) -> [String] {
+    luaL_checktype(L, idx, halo_lua_ttable())
+    let len = Int(lua_rawlen(L, idx))
+    var out: [String] = []
+    if len > 0 {
+        for i in 1...len {
+            lua_rawgeti(L, idx, lua_Integer(i))
+            if let c = lua_tolstring(L, -1, nil) { out.append(String(cString: c)) }
+            lua_settop(L, -2)
+        }
+    }
+    return out
+}
+
+/// halo.panel(lines [, title [, corner [, id]]]) → id. With an existing id it updates that
+/// panel; otherwise it creates one. Plugins build live custom UI with it (+ halo.timer).
+private func l_halo_panel(_ L: OpaquePointer?) -> Int32 {
+    let lines = luaStringArray(L, 1)
+    let title  = lua_tolstring(L, 2, nil).map { String(cString: $0) } ?? ""
+    let corner = lua_tolstring(L, 3, nil).map { String(cString: $0) } ?? "topright"
+    let id = lua_gettop(L) >= 4 ? Int(lua_tointegerx(L, 4, nil)) : 0
+    lua_pushinteger(L, lua_Integer(luaPanel(lines, title, corner, id)))
+    return 1
+}
+/// halo.close(id) — remove a panel created by halo.panel.
+private func l_halo_close(_ L: OpaquePointer?) -> Int32 {
+    luaClosePanel(Int(luaL_checkinteger(L, 1)))
+    return 0
+}
+/// halo.prompt(message, fn) — ask for a line of text; fn(text) runs on Enter (one-shot).
+private func l_halo_prompt(_ L: OpaquePointer?) -> Int32 {
+    let msg = luaL_checklstring(L, 1, nil).map { String(cString: $0) } ?? ""
+    luaL_checktype(L, 2, halo_lua_tfunction())
+    lua_pushvalue(L, 2)
+    let ref = luaL_ref(L, halo_lua_registryindex())
+    luaShowPrompt(msg, ref)
+    return 0
+}
+
 /// git-clone a plugin (run off-main). `spec` is "owner/repo" (→ GitHub) or a full URL.
 func gitClonePlugin(_ spec: String, to dir: String) -> Bool {
     let url = (spec.hasPrefix("http") || spec.hasPrefix("git@")) ? spec : "https://github.com/\(spec).git"
@@ -182,7 +226,7 @@ final class LuaRuntime {
         if let old = luaState { lua_close(old); luaState = nil }
         // Drop refs/timers from the previous load (reload re-registers everything fresh).
         luaCommands.removeAll(); luaEvents.removeAll(); luaBinds.removeAll(); luaPluginSpecs.removeAll()
-        luaClearTimers()
+        luaClearTimers(); luaClearPanels()
         guard let L = luaL_newstate() else { return }
         luaState = L
         luaL_openlibs(L)
@@ -201,6 +245,9 @@ final class LuaRuntime {
         reg("timer",   l_halo_timer)
         reg("pick",    l_halo_pick)
         reg("status",  l_halo_status)
+        reg("panel",   l_halo_panel)
+        reg("close",   l_halo_close)
+        reg("prompt",  l_halo_prompt)
         lua_setglobal(L, "halo")
         runPrelude()   // convenience wrappers over halo.cmd
         runInit()

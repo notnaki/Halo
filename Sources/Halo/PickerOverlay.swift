@@ -13,6 +13,14 @@ final class PickerOverlay: NSView, NSTextFieldDelegate {
     private let listStack = NSStackView()
     private let onChoose: (String) -> Void
     private let onCancel: () -> Void
+    private var isPrompt = false   // free-text input (halo.prompt) vs list pick (halo.pick)
+
+    /// Free-text prompt (halo.prompt): a field with no list; Enter submits the typed text.
+    convenience init(theme: Theme, prompt: String, onSubmit: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+        self.init(theme: theme, items: [], onChoose: onSubmit, onCancel: onCancel)
+        isPrompt = true
+        input.placeholderString = prompt
+    }
 
     init(theme: Theme, items: [String], onChoose: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
         self.theme = theme
@@ -127,7 +135,10 @@ final class PickerOverlay: NSView, NSTextFieldDelegate {
         case #selector(NSResponder.moveUp(_:)):
             if !shown.isEmpty { selected = max(selected - 1, 0); rebuildRows() }; return true
         case #selector(NSResponder.insertNewline(_:)):
-            if shown.indices.contains(selected) { onChoose(shown[selected]) } else { onCancel() }; return true
+            if isPrompt { onChoose(input.stringValue) }
+            else if shown.indices.contains(selected) { onChoose(shown[selected]) }
+            else { onCancel() }
+            return true
         case #selector(NSResponder.cancelOperation(_:)):
             onCancel(); return true
         default: return false
