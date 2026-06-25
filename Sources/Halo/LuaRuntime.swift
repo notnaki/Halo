@@ -15,6 +15,9 @@ nonisolated(unsafe) var luaBinds: [(spec: String, ref: Int32)] = []  // "cmd+shi
 nonisolated(unsafe) var luaActiveInfo: () -> (cwd: String, title: String, paneID: String)? = { nil }
 nonisolated(unsafe) var luaSendText: (String) -> Void = { _ in }
 nonisolated(unsafe) var luaPluginSpecs: [String] = []                 // declared via halo.plugin(...)
+nonisolated(unsafe) var luaControl: (String, [String]) -> [String: Any] = { _, _ in [:] }  // halo.cmd → control dispatch
+nonisolated(unsafe) var luaScheduleTimer: (Double, Int32) -> Void = { _, _ in }            // halo.timer
+nonisolated(unsafe) var luaClearTimers: () -> Void = {}                                     // reset on reload
 
 // Pop the function at stack slot 2 into the registry and return its ref (for on/command/bind).
 private func refFunctionArg2(_ L: OpaquePointer?) -> Int32 {
@@ -48,6 +51,46 @@ private func l_halo_send(_ L: OpaquePointer?) -> Int32 {
 }
 private func l_halo_plugin(_ L: OpaquePointer?) -> Int32 {
     if let c = luaL_checklstring(L, 1, nil) { luaPluginSpecs.append(String(cString: c)) }
+    return 0
+}
+
+/// Push a Swift value as a Lua value (recursively for arrays/dicts) — used to hand
+/// `halo.cmd(...)` results (e.g. capture text, the full state tree) back to Lua.
+private func pushLuaValue(_ L: OpaquePointer?, _ v: Any) {
+    switch v {
+    case let s as String:  s.withCString { _ = lua_pushstring(L, $0) }
+    case let b as Bool:    lua_pushboolean(L, b ? 1 : 0)
+    case let i as Int:     lua_pushinteger(L, lua_Integer(i))
+    case let d as Double:  lua_pushnumber(L, d)
+    case let arr as [Any]:
+        lua_createtable(L, Int32(arr.count), 0)
+        for (i, e) in arr.enumerated() { pushLuaValue(L, e); lua_rawseti(L, -2, lua_Integer(i + 1)) }
+    case let dict as [String: Any]:
+        lua_createtable(L, 0, Int32(dict.count))
+        for (k, val) in dict { pushLuaValue(L, val); lua_setfield(L, -2, k) }
+    default: lua_pushnil(L)
+    }
+}
+
+/// halo.cmd(verb, ...string args) → runs a control verb (same as the CLI) and returns
+/// its result as a Lua table. Gives plugins capture/state/split/tab/select/open/zoom/…
+private func l_halo_cmd(_ L: OpaquePointer?) -> Int32 {
+    guard let c = luaL_checklstring(L, 1, nil) else { return 0 }
+    let verb = String(cString: c)
+    var args: [String] = []
+    let n = lua_gettop(L)
+    if n >= 2 { for i in 2...n { if let a = lua_tolstring(L, i, nil) { args.append(String(cString: a)) } } }
+    pushLuaValue(L, luaControl(verb, args))
+    return 1
+}
+
+/// halo.timer(seconds, fn) — call fn every `seconds` (repeating). Cleared on reload.
+private func l_halo_timer(_ L: OpaquePointer?) -> Int32 {
+    let secs = lua_tonumberx(L, 1, nil)
+    luaL_checktype(L, 2, halo_lua_tfunction())
+    lua_pushvalue(L, 2)
+    let ref = luaL_ref(L, halo_lua_registryindex())
+    luaScheduleTimer(secs, ref)
     return 0
 }
 
@@ -106,12 +149,13 @@ final class LuaRuntime {
 
     func start() {
         if let old = luaState { lua_close(old); luaState = nil }
-        // Drop refs from the previous load (reload re-registers everything fresh).
+        // Drop refs/timers from the previous load (reload re-registers everything fresh).
         luaCommands.removeAll(); luaEvents.removeAll(); luaBinds.removeAll(); luaPluginSpecs.removeAll()
+        luaClearTimers()
         guard let L = luaL_newstate() else { return }
         luaState = L
         luaL_openlibs(L)
-        lua_createtable(L, 0, 6)   // the `halo` table
+        lua_createtable(L, 0, 10)   // the `halo` table
         func reg(_ name: String, _ fn: lua_CFunction) {
             lua_pushcclosure(L, fn, 0); lua_setfield(L, -2, name)
         }
@@ -122,7 +166,10 @@ final class LuaRuntime {
         reg("send",    l_halo_send)
         reg("active",  l_halo_active)
         reg("plugin",  l_halo_plugin)
+        reg("cmd",     l_halo_cmd)
+        reg("timer",   l_halo_timer)
         lua_setglobal(L, "halo")
+        runPrelude()   // convenience wrappers over halo.cmd
         runInit()
         loadPlugins()                // declared (halo.plugin) + drop-in plugins/*/
         luaFire("config-reloaded")   // handlers registered in init.lua/plugins react to (re)load
@@ -201,6 +248,30 @@ final class LuaRuntime {
         }
         start()
         return names
+    }
+
+    /// Convenience wrappers over halo.cmd, defined in Lua so plugins get ergonomic helpers
+    /// (halo.capture/state/split/tab/select/open/zoom/browser/focus) without shelling out.
+    private func runPrelude() {
+        guard let L = luaState else { return }
+        let prelude = """
+        function halo.capture(scrollback)
+          local r = scrollback and halo.cmd("capture","focused","--scrollback") or halo.cmd("capture","focused")
+          return r and r.text or ""
+        end
+        function halo.state() return halo.cmd("state") end
+        function halo.split(h) if h then halo.cmd("split","-h") else halo.cmd("split") end end
+        function halo.open(p) halo.cmd("open", p) end
+        function halo.tab(a) halo.cmd("tab", a or "new") end
+        function halo.select(p,s) halo.cmd("select", tostring(p), tostring(s)) end
+        function halo.zoom() halo.cmd("zoom") end
+        function halo.browser(u) halo.cmd("browser", u or "about:blank") end
+        function halo.focus(id) if id then halo.cmd("focus", tostring(id)) else halo.cmd("focus") end end
+        """
+        if prelude.withCString({ luaL_loadstring(L, $0) }) != 0 || lua_pcallk(L, 0, 0, 0, 0, nil) != 0 {
+            let err = lua_tolstring(L, -1, nil).map { String(cString: $0) } ?? "error"
+            luaNotify("prelude: \(err)"); lua_settop(L, -2)
+        }
     }
 
     private func runInit() {

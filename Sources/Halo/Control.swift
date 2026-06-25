@@ -121,6 +121,10 @@ final class ControlServer: @unchecked Sendable {
         return tree.focused
     }
 
+    /// Run a verb the same way the CLI does — used by Lua's `halo.cmd(...)` so plugins
+    /// get every control verb (capture/state/split/tab/select/…) natively.
+    @MainActor func invoke(_ cmd: String, _ args: [String]) -> [String: Any] { dispatch(cmd, args) }
+
     @MainActor private func dispatch(_ cmd: String, _ args: [String]) -> [String: Any] {
         // App-level verbs that don't need a current window.
         switch cmd {

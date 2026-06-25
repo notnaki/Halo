@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // we rebuild windows at launch; `savePending` coalesces rapid changes.
     private var restoring = false
     private var savePending = false
+    private var luaTimers: [Timer] = []   // halo.timer schedules; cleared on reload
 
     /// Create, show, and track a new window. ⌘N / first launch.
     @discardableResult
@@ -223,6 +224,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (t.focusedCwd ?? "", t.focusedTitle, t.focusedPaneID ?? "")
         }
         luaSendText = { [weak self] s in self?.active?.workspace.activeTree.focused?.sendKeys(s) }
+        luaControl = { [weak self] cmd, args in self?.server.invoke(cmd, args) ?? [:] }
+        luaScheduleTimer = { [weak self] secs, ref in
+            let t = Timer.scheduledTimer(withTimeInterval: max(0.05, secs), repeats: true) { _ in
+                MainActor.assumeIsolated { luaCall(ref: ref) }
+            }
+            self?.luaTimers.append(t)
+        }
+        luaClearTimers = { [weak self] in self?.luaTimers.forEach { $0.invalidate() }; self?.luaTimers.removeAll() }
         LuaRuntime.shared.start()   // embedded Lua: run ~/.config/halo/init.lua
 
         installKeybinds()
