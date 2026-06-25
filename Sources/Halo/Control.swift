@@ -8,7 +8,7 @@ func controlSocketPath() -> String {
     return base + "/control.sock"
 }
 
-let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "kill", "new-window", "state", "select", "rename", "project"]
+let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "kill", "new-window", "state", "select", "rename", "project", "notify", "run"]
 
 // MARK: - Socket helpers
 
@@ -126,6 +126,14 @@ final class ControlServer: @unchecked Sendable {
         switch cmd {
         case "state":
             return stateProvider?() ?? ["ok": false, "error": "no state"]
+        case "notify":
+            guard !args.isEmpty else { return ["ok": false, "error": "notify: <message> required"] }
+            luaNotify(args.joined(separator: " "))   // same toast as halo.notify in Lua
+            return ["ok": true]
+        case "run":
+            guard let name = args.first else { return ["ok": false, "error": "run: <command> required"] }
+            return luaRunCommand(name) ? ["ok": true, "ran": name]
+                                       : ["ok": false, "error": "no Lua command: \(name)"]
         case "new-window":
             onNewWindow?()
             return ["ok": true]
@@ -316,6 +324,8 @@ func printUsage() {
       worktree <branch> [--base <ref>]      open a git-worktree-isolated session on <branch>
       browser [url|port]                    open an embedded browser pane (port → http://localhost:PORT)
       reload                                re-read the config and apply colors/font/theme live
+      notify <message>                      show a toast banner in the active window
+      run <name>                            run a Lua command registered via halo.command
       state                                 dump all windows→projects→sessions→panes as JSON
       select <project> <session>            switch the active window to a session (0-based)
       rename <name>                         rename the active session

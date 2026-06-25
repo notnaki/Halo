@@ -94,6 +94,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for w in windows where w !== key { w.workspace.reconcile(preferLive: false) }
     }
 
+    /// Show `msg` as a transient toast banner in the key window (what `halo.notify` calls).
+    /// In-app so it's visible even under `swift run` (macOS notifications need a signed
+    /// bundle). Falls back to stderr when there's no window. Uses the theme accent — no
+    /// hardcoded colors.
+    func showToast(_ msg: String) {
+        guard let host = active?.controller.window?.contentView else {
+            FileHandle.standardError.write(Data("[halo.lua] \(msg)\n".utf8)); return
+        }
+        let label = NSTextField(labelWithString: msg)
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = NSColor(white: 0.96, alpha: 1)
+        label.maximumNumberOfLines = 4
+        label.lineBreakMode = .byWordWrapping
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let banner = NSView()
+        banner.wantsLayer = true
+        banner.layer?.backgroundColor = NSColor(white: 0.11, alpha: 0.97).cgColor
+        banner.layer?.cornerRadius = 9
+        banner.layer?.borderWidth = 1
+        banner.layer?.borderColor = theme.accent.withAlphaComponent(0.55).cgColor
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.addSubview(label)
+        host.addSubview(banner)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: banner.topAnchor, constant: 11),
+            label.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -11),
+            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 15),
+            label.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -15),
+            banner.topAnchor.constraint(equalTo: host.topAnchor, constant: 46),
+            banner.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+            banner.widthAnchor.constraint(lessThanOrEqualTo: host.widthAnchor, multiplier: 0.7),
+        ])
+        banner.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.18; banner.animator().alphaValue = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+            NSAnimationContext.runAnimationGroup({ ctx in ctx.duration = 0.32; banner.animator().alphaValue = 0 },
+                completionHandler: { banner.removeFromSuperview() })
+        }
+    }
+
     /// Full structured state for `halo state`: the shared project/session pool plus every
     /// window's view (active selection + whether it hosts the live terminal). Lets an agent
     /// see the whole tree the sidebar shows, not just the active window's panes.
@@ -176,6 +216,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.onNewWindow = { [weak self] in self?.newWindow(); NSApp.activate(ignoringOtherApps: true) }
         server.stateProvider = { [weak self] in self?.fullState() ?? ["ok": false] }
         server.start()
+        // Lua bridge handlers (halo.notify / active / send), then run init.lua.
+        luaNotify = { [weak self] msg in self?.showToast(msg) }
+        luaActiveInfo = { [weak self] in
+            guard let t = self?.active?.workspace.activeTree else { return nil }
+            return (t.focusedCwd ?? "", t.focusedTitle, t.focusedPaneID ?? "")
+        }
+        luaSendText = { [weak self] s in self?.active?.workspace.activeTree.focused?.sendKeys(s) }
         LuaRuntime.shared.start()   // embedded Lua: run ~/.config/halo/init.lua
 
         installKeybinds()
@@ -430,6 +477,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if mods == prefix.mods, (e.charactersIgnoringModifiers ?? "").lowercased() == prefix.key {
                     self.prefixState.arm()
                     return nil
+                }
+            }
+            // ── Lua keybinds (halo.bind) — before built-in ⌘ binds, so a script can claim
+            // any chord (e.g. ctrl+g, cmd+shift+p) ───────────────────────────────────────
+            if !luaBinds.isEmpty {
+                let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+                let key = (e.charactersIgnoringModifiers ?? "").lowercased()
+                for b in luaBinds where parsePrefixSpec(b.spec).map({ $0.mods == mods && $0.key == key }) == true {
+                    luaCall(ref: b.ref); return nil
                 }
             }
             guard e.modifierFlags.contains(.command) else { return e }

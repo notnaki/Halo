@@ -2,5 +2,6 @@ module CLua {
     header "lua.h"
     header "lualib.h"
     header "lauxlib.h"
+    header "lua_shim.h"
     export *
 }

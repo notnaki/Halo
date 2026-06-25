@@ -123,6 +123,7 @@ final class Workspace {
         activeP = p
         activeS = projs[p].sessions.count - 1
         showActive()
+        luaFire("session-opened", tree.paneID)
     }
 
     func newSession(_ p: Int) {
@@ -204,6 +205,7 @@ final class Workspace {
         activeP = p; activeS = s
         attention.remove(ObjectIdentifier(activeTree))
         showActive()
+        luaFire("focus-changed", activeTree.paneID)
     }
 
     /// Drop all identity-keyed state for a session being removed. Without this a
@@ -226,6 +228,7 @@ final class Workspace {
         // truth, so there are no orphaned detached sessions. (Window-close still only
         // detaches, since it doesn't drop the PaneTree from the shared store.)
         closing.paneIDs.forEach { MuxClient.kill(paneID: $0) }
+        luaFire("session-closed", closing.paneID)
         // If this was a worktree session, best-effort remove its worktree dir
         // off-main (non-force → dirty worktrees are left intact, never destroyed).
         if let branch = worktreeBranch[ObjectIdentifier(closing)] {

@@ -108,8 +108,9 @@ final class WindowContext {
             if isBusy {
                 sessionBusy[oid] = (shell: prev.shell, busyTicks: prev.busyTicks + 1)
             } else {
-                if prev.busyTicks >= attnMinTicks && oid != activeID {
-                    workspace.markAttention(tree)
+                if prev.busyTicks >= attnMinTicks {
+                    if oid != activeID { workspace.markAttention(tree) }
+                    luaFire("command-finished", tree.focusedPaneID)   // a command / agent turn finished
                 }
                 sessionBusy[oid] = (shell: prev.shell, busyTicks: 0)
             }
