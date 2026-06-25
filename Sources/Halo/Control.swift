@@ -8,7 +8,7 @@ func controlSocketPath() -> String {
     return base + "/control.sock"
 }
 
-let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "kill", "new-window"]
+let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "kill", "new-window", "state", "select", "rename", "project"]
 
 // MARK: - Socket helpers
 
@@ -58,6 +58,9 @@ final class ControlServer: @unchecked Sendable {
     /// Open a new window in THIS running instance (so `halo` with the app open opens a
     /// window instead of launching a second instance). Set by AppDelegate.
     var onNewWindow: (@MainActor () -> Void)?
+    /// Full structured dump of every window → project → session → pane (set by
+    /// AppDelegate, which alone can see all windows + the shared store).
+    var stateProvider: (@MainActor () -> [String: Any])?
 
     init(workspaceProvider: @escaping @MainActor () -> Workspace?) { self.workspaceProvider = workspaceProvider }
 
@@ -121,6 +124,8 @@ final class ControlServer: @unchecked Sendable {
     @MainActor private func dispatch(_ cmd: String, _ args: [String]) -> [String: Any] {
         // App-level verbs that don't need a current window.
         switch cmd {
+        case "state":
+            return stateProvider?() ?? ["ok": false, "error": "no state"]
         case "new-window":
             onNewWindow?()
             return ["ok": true]
@@ -193,6 +198,33 @@ final class ControlServer: @unchecked Sendable {
         case "search":
             workspace.activeTree.focused?.search(args.first ?? "")
             return ["ok": true]
+        case "select":
+            guard args.count >= 2, let p = Int(args[0]), let s = Int(args[1]) else {
+                return ["ok": false, "error": "select: <project> <session> (0-based indices)"]
+            }
+            workspace.selectSession(p, s)
+            return ["ok": true, "project": p, "session": s]
+        case "rename":
+            guard let name = args.first else { return ["ok": false, "error": "rename: <name> required"] }
+            workspace.renameSession(workspace.activeP, workspace.activeS, name)
+            return ["ok": true, "name": name]
+        case "project":
+            switch args.first {
+            case "new":
+                workspace.newProject()
+                if let name = argValue(args, "--name") { workspace.renameProject(workspace.activeP, name) }
+            case "rename":
+                guard args.count >= 2 else { return ["ok": false, "error": "project rename <name>"] }
+                workspace.renameProject(workspace.activeP, args[1])
+            case "remove":
+                workspace.removeProject(workspace.activeP)
+            case "color":
+                guard args.count >= 2 else { return ["ok": false, "error": "project color <#hex|none>"] }
+                workspace.setProjectColor(workspace.activeP, args[1] == "none" ? nil : ghosttyColor(args[1]))
+            default:
+                return ["ok": false, "error": "project: new [--name X] | rename <name> | remove | color <#hex|none>"]
+            }
+            return ["ok": true, "project": workspace.activeP]
         default:
             return ["ok": false, "error": "unknown cmd: \(cmd)"]
         }
@@ -247,6 +279,9 @@ func runControlCLI(_ args: [String]) -> Int32 {
 
     if verb == "list", let panes = obj["panes"] as? [Any] {
         for p in panes { print(p) }
+    } else if verb == "state" {
+        if let d = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+           let s = String(data: d, encoding: .utf8) { print(s) }
     } else if verb == "capture", let text = obj["text"] as? String {
         print(text)
     } else if verb == "open", let path = obj["path"] as? String {
@@ -281,6 +316,10 @@ func printUsage() {
       worktree <branch> [--base <ref>]      open a git-worktree-isolated session on <branch>
       browser [url|port]                    open an embedded browser pane (port → http://localhost:PORT)
       reload                                re-read the config and apply colors/font/theme live
+      state                                 dump all windows→projects→sessions→panes as JSON
+      select <project> <session>            switch the active window to a session (0-based)
+      rename <name>                         rename the active session
+      project new [--name X]|rename <name>|remove|color <#hex|none>   manage projects
       kill <id>                             terminate a session's shell under the daemon
 
     Config (in your ghostty config; libghostty ignores the halo- keys):

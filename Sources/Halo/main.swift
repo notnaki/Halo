@@ -94,6 +94,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for w in windows where w !== key { w.workspace.reconcile(preferLive: false) }
     }
 
+    /// Full structured state for `halo state`: the shared project/session pool plus every
+    /// window's view (active selection + whether it hosts the live terminal). Lets an agent
+    /// see the whole tree the sidebar shows, not just the active window's panes.
+    func fullState() -> [String: Any] {
+        let projects = store.projs.enumerated().map { (pi, p) -> [String: Any] in
+            let sessions = p.sessions.enumerated().map { (si, t) -> [String: Any] in
+                var d: [String: Any] = ["index": si, "panes": t.paneIDs.count, "paneIDs": t.paneIDs]
+                if let n = t.name { d["name"] = n }
+                if let c = t.focusedCwd { d["cwd"] = c }
+                return d
+            }
+            var d: [String: Any] = ["index": pi, "name": p.name, "path": p.path,
+                                    "expanded": p.expanded, "sessions": sessions]
+            if let c = p.color { d["color"] = hexString(c) }
+            return d
+        }
+        let wins = windows.enumerated().map { (wi, w) -> [String: Any] in
+            ["index": wi, "key": w === active, "activeProject": w.workspace.activeP,
+             "activeSession": w.workspace.activeS, "hostsLive": w.workspace.hostsLive]
+        }
+        return ["ok": true, "projects": projects, "windows": wins]
+    }
+
 
     // MARK: - Window-state persistence
 
@@ -151,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server = ControlServer(workspaceProvider: { [weak self] in self?.active?.workspace })
         server.onReload = { [weak self] in self?.reloadConfig() }
         server.onNewWindow = { [weak self] in self?.newWindow(); NSApp.activate(ignoringOtherApps: true) }
+        server.stateProvider = { [weak self] in self?.fullState() ?? ["ok": false] }
         server.start()
 
         installKeybinds()
