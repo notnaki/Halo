@@ -141,8 +141,18 @@ final class ControlServer: @unchecked Sendable {
         case "plugins":
             switch args.first {
             case "sync":         return ["ok": true, "plugins": LuaRuntime.shared.syncPlugins()]
-            case "list", .none:  return ["ok": true, "plugins": LuaRuntime.shared.installedPlugins()]
-            default:             return ["ok": false, "error": "plugins: list|sync"]
+            case "list", .none:  return ["ok": true,
+                                          "plugins": LuaRuntime.shared.installedPlugins(),
+                                          "disabled": LuaRuntime.shared.disabledPlugins().sorted()]
+            case "enable", "disable":
+                guard let name = args.dropFirst().first else {
+                    return ["ok": false, "error": "plugins \(args[0]) <name>"]
+                }
+                let enabled = args[0] == "enable"
+                LuaRuntime.shared.setPluginEnabled(name, enabled)
+                onReload?()   // re-run init/plugins (skipping disabled) + reapply config/chrome
+                return ["ok": true, "plugin": name, "enabled": enabled]
+            default:             return ["ok": false, "error": "plugins: list|sync|enable|disable <name>"]
             }
         case "new-window":
             onNewWindow?()
@@ -298,7 +308,14 @@ func runControlCLI(_ args: [String]) -> Int32 {
     if verb == "list", let panes = obj["panes"] as? [Any] {
         for p in panes { print(p) }
     } else if verb == "plugins", let names = obj["plugins"] as? [String] {
-        if names.isEmpty { print("(no plugins)") } else { for n in names { print(n) } }
+        let off = Set(obj["disabled"] as? [String] ?? [])
+        if let p = obj["plugin"] as? String {        // enable/disable result
+            print("\(p): \((obj["enabled"] as? Bool) == true ? "enabled" : "disabled")")
+        } else if names.isEmpty {
+            print("(no plugins)")
+        } else {
+            for n in names { print(off.contains(n) ? "\(n)  (disabled)" : n) }
+        }
     } else if verb == "state" {
         if let d = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
            let s = String(data: d, encoding: .utf8) { print(s) }
@@ -353,7 +370,8 @@ func printUsage() {
       reload                                re-read the config and apply colors/font/theme live
       notify <message>                      show a toast banner in the active window
       run <name>                            run a Lua command registered via halo.command
-      plugins [list|sync]                   list installed Lua plugins, or git-pull + reload them
+      plugins [list|sync]                   list installed Lua plugins (marks disabled), or git-pull + reload them
+      plugins enable|disable <name>         turn a plugin on/off and reload
       state                                 dump all windows→projects→sessions→panes as JSON
       sessions                              readable session list with select indices (▸ = active)
       select <project> <session>            switch the active window to a session (0-based)

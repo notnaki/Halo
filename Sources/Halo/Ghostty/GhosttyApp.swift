@@ -113,6 +113,18 @@ final class GhosttyApp {
         } else {
             ghostty_config_load_default_files(cfg)
         }
+        // config-in-Lua: ghostty keys set via halo.set() (e.g. `background`) reach libghostty
+        // only through a file. Write them last so Lua wins, then load on top of the user config.
+        let ghosttyOverrides = luaConfigOverrides.filter { !$0.key.hasPrefix("halo-") }
+        let path = LuaRuntime.configDir + "/.lua-overrides.conf"
+        if ghosttyOverrides.isEmpty {
+            try? FileManager.default.removeItem(atPath: path)
+        } else {
+            let body = ghosttyOverrides.sorted { $0.key < $1.key }
+                .map { "\($0.key) = \($0.value)" }.joined(separator: "\n")
+            try? body.write(toFile: path, atomically: true, encoding: .utf8)
+            path.withCString { ghostty_config_load_file(cfg, $0) }
+        }
         ghostty_config_finalize(cfg)
         return cfg
     }

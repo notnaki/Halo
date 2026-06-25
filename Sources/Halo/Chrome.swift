@@ -87,6 +87,7 @@ final class HaloWindowController: NSWindowController {
             backing: .buffered, defer: false)
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
+        win.titlebarSeparatorStyle = .none      // no hairline between titlebar and content
         win.backgroundColor = surface
         win.isMovableByWindowBackground = false
         // Keep the window object alive when the user closes it, so the app can
@@ -102,6 +103,69 @@ final class HaloWindowController: NSWindowController {
         buildContent(content: content)
         buildTitlebarAccessory()
         updateToggleTint()
+        flattenTitlebarSoon()
+        // AppKit re-shows the titlebar material on key/main changes — re-flatten then.
+        for n: NSNotification.Name in [NSWindow.didBecomeKeyNotification,
+                                       NSWindow.didBecomeMainNotification,
+                                       NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(forName: n, object: win, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flattenTitlebarSoon() }
+            }
+        }
+    }
+
+    private weak var titlebarBacking: NSView?
+
+    /// `titlebarAppearsTransparent` clears the titlebar's background but leaves an
+    /// NSVisualEffectView that tints the strip ~7% lighter — a mismatched bar over a very
+    /// dark surface. Hiding it doesn't stick on a cold first window (AppKit resets `isHidden`
+    /// after our passes), so own a persistent opaque backing pinned over the titlebar. Insert
+    /// it just *below the accessory container* so the toggle/folder/dir and traffic lights stay
+    /// above it; it's click-through so window dragging still works. ponytail: a view graft is
+    /// the only durable handle AppKit gives for the titlebar material.
+    func flattenTitlebar() {
+        guard let bar = window?.standardWindowButton(.closeButton)?.superview else { return }
+        let backing = titlebarBacking ?? {
+            let b = TitlebarBackingView()
+            b.wantsLayer = true
+            b.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(b, positioned: .below, relativeTo: nil)
+            NSLayoutConstraint.activate([
+                b.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+                b.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+                b.topAnchor.constraint(equalTo: bar.topAnchor),
+                b.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            ])
+            titlebarBacking = b
+            return b
+        }()
+        backing.layer?.backgroundColor = surface.cgColor
+        // Re-seat just below the accessory's container (a direct child of the titlebar) so the
+        // backing covers the material yet the accessory + traffic lights remain above it.
+        var node: NSView? = toggleButton
+        while let n = node, n.superview !== bar { node = n.superview }
+        if let accChild = node, accChild.superview === bar {
+            bar.addSubview(backing, positioned: .below, relativeTo: accChild)
+        }
+        // Belt-and-suspenders: also hide the material outright where we can reach it.
+        func hide(_ v: NSView) {
+            if v is NSVisualEffectView, v !== backing { v.isHidden = true }
+            v.subviews.forEach(hide)
+        }
+        bar.subviews.forEach(hide)
+    }
+
+    /// The titlebar's effect view is created lazily — on a cold first window it can appear
+    /// *after* a single flatten pass runs (the material then shows until something re-themes
+    /// the window, e.g. a new window). Retry on a short bounded schedule to catch it whenever
+    /// AppKit builds it. ponytail: a few timed retries beat the lazy-init race; AppKit exposes
+    /// no "titlebar ready" hook. Also re-run on reload / key-window changes (observers in init).
+    func flattenTitlebarSoon() {
+        for ms in [0, 80, 200, 500, 1000] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak self] in
+                self?.flattenTitlebar()
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("no xib") }
@@ -115,6 +179,7 @@ final class HaloWindowController: NSWindowController {
         surface = t.background
         window?.backgroundColor = surface
         sidebar?.layer?.backgroundColor = surface.cgColor
+        flattenTitlebarSoon()
         prefixPill?.textColor = t.accent
         prefixPill?.layer?.borderColor = t.accent.cgColor
         prefixPill?.layer?.backgroundColor = t.accent.withAlphaComponent(0.12).cgColor
@@ -271,7 +336,8 @@ final class HaloWindowController: NSWindowController {
 
         NSLayoutConstraint.activate([
             edge.trailingAnchor.constraint(equalTo: v.trailingAnchor),
-            edge.topAnchor.constraint(equalTo: v.topAnchor),
+            // Start below the ~34px titlebar so the divider doesn't slice through the title strip.
+            edge.topAnchor.constraint(equalTo: v.topAnchor, constant: 34),
             edge.bottomAnchor.constraint(equalTo: v.bottomAnchor),
             edge.widthAnchor.constraint(equalToConstant: 1),
 
@@ -866,6 +932,12 @@ final class TaggedRow: NSView {
             layer?.backgroundColor = NSColor.clear.cgColor
         }
     }
+}
+
+/// Opaque fill pinned over the titlebar to defeat AppKit's translucent material. Click-through
+/// (returns nil from hitTest) so the titlebar still drags/zooms the window normally.
+private final class TitlebarBackingView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// NSMenuItem with a stored closure — avoids @objc/#selector for inline menu actions.

@@ -60,12 +60,17 @@ private func l_halo_status(_ L: OpaquePointer?) -> Int32 {
     luaSetStatus(luaL_checklstring(L, 1, nil).map { String(cString: $0) } ?? "")
     return 0
 }
-/// halo.set(key, value) — override a halo-* config key (Lua wins over the file/UI). Keys
-/// are normalized to the `halo-` prefix; value coerced to a string (booleans → true/false).
+/// halo.set(key, value) — override a config key (Lua wins over the file/UI). Chrome
+/// aliases (accent/surface/…) get the `halo-` prefix; any other key is treated as a raw
+/// ghostty key (e.g. `background`) and reaches libghostty. Value coerced to a string.
+/// Short names that map to Halo's own chrome knobs (everything else is a raw ghostty key).
+private let haloConfigAliases: Set<String> = [
+    "accent", "surface", "font-family", "sidebar-width", "font-size", "divider-width"]
+
 private func l_halo_set(_ L: OpaquePointer?) -> Int32 {
     guard let kc = luaL_checklstring(L, 1, nil) else { return 0 }
     var key = String(cString: kc)
-    if !key.hasPrefix("halo-") { key = "halo-" + key }
+    if haloConfigAliases.contains(key) { key = "halo-" + key }   // chrome knob; else a ghostty key
     let val: String
     if let vc = lua_tolstring(L, 2, nil) { val = String(cString: vc) }   // string / number
     else { val = lua_toboolean(L, 2) != 0 ? "true" : "false" }            // boolean
@@ -192,6 +197,7 @@ private func l_halo_panel(_ L: OpaquePointer?) -> Int32 {
         if let t = str("title") { o.title = t }
         if let c = str("corner") { o.corner = c }
         o.bgHex = str("bg")
+        o.allWindows = (str("window") == "all")   // "all" → every window; default "active"
         lua_getfield(L, 2, "id");    o.id = Int(lua_tointegerx(L, -1, nil)); lua_settop(L, -2)
         lua_getfield(L, 2, "width"); o.width = lua_tonumberx(L, -1, nil);    lua_settop(L, -2)
     }
@@ -308,12 +314,14 @@ final class LuaRuntime {
     private func loadPlugins() {
         let base = Self.pluginsDir
         try? FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        let disabled = disabledPlugins()
         var handled = Set<String>()
         for spec in luaPluginSpecs {
             let name = ((spec as NSString).lastPathComponent as NSString)
                 .deletingPathExtension   // strip a trailing .git
             let dir = base + "/" + name
             handled.insert(dir)
+            if disabled.contains(name) { continue }
             if FileManager.default.fileExists(atPath: dir) {
                 loadPluginEntry(dir)
             } else {
@@ -333,9 +341,25 @@ final class LuaRuntime {
             let dir = base + "/" + e
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue,
-                  !handled.contains(dir) else { continue }
+                  !handled.contains(dir), !disabled.contains(e) else { continue }
             loadPluginEntry(dir)
         }
+    }
+
+    static var disabledPath: String { configDir + "/disabled-plugins" }
+
+    /// Names of plugins the user has turned off (skipped at load). One name per line.
+    func disabledPlugins() -> Set<String> {
+        guard let t = try? String(contentsOfFile: Self.disabledPath, encoding: .utf8) else { return [] }
+        return Set(t.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }
+
+    /// Persist a plugin's enabled state. The caller triggers the full reload (config + chrome).
+    func setPluginEnabled(_ name: String, _ enabled: Bool) {
+        var d = disabledPlugins()
+        if enabled { d.remove(name) } else { d.insert(name) }
+        try? d.sorted().joined(separator: "\n").write(toFile: Self.disabledPath, atomically: true, encoding: .utf8)
     }
 
     /// Run a plugin's entry script (`<dir>/init.lua` or `<dir>/plugin/init.lua`).

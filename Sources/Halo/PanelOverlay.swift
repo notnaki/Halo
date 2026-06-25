@@ -15,6 +15,7 @@ struct PanelOpts {
     var id = 0
     var bgHex: String? = nil
     var width: Double = 0
+    var allWindows = false   // window = "all" → render in every window; else only the active one
 }
 
 /// A clickable panel row rendered as a button (filled, accent-tinted, hover highlight).

@@ -53,7 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var restoring = false
     private var savePending = false
     private var luaTimers: [Timer] = []   // halo.timer schedules; cleared on reload
-    private var luaPanels: [Int: PanelOverlay] = [:]   // halo.panel; cleared on reload
+    // halo.panel state is window-agnostic: specs are the source of truth; overlays are
+    // rendered into windows per scope (active-only follows focus; all → every window).
+    private struct PanelSpec { var lines: [PanelLine]; var opts: PanelOpts }
+    private var luaPanelSpecs: [Int: PanelSpec] = [:]                  // id → spec (cleared on reload)
+    private var panelViews: [Int: [ObjectIdentifier: PanelOverlay]] = [:]   // id → window → overlay
     private var luaPanelCounter = 0
 
     /// Create, show, and track a new window. ⌘N / first launch.
@@ -84,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             win.setFrameOrigin(NSPoint(x: prev.frame.minX + 26, y: prev.frame.minY - 26))
         }
         ctx.start()
+        renderPanels()   // a new window immediately shows "all"-scoped panels
         return ctx
     }
 
@@ -100,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let key = active else { return }
         key.workspace.reconcile(preferLive: true)
         for w in windows where w !== key { w.workspace.reconcile(preferLive: false) }
+        renderPanels()   // active-scoped panels follow focus; new windows pick up "all" panels
     }
 
     /// Show a `halo.pick` picker overlay in the key window; call the Lua ref with the
@@ -116,20 +122,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         host.addSubview(overlay)
     }
 
-    /// halo.panel: create (id 0) or update (existing id) a plugin panel in the key window.
-    /// Returns the panel id. Corner is fixed at creation.
+    /// halo.panel: create (id 0) or update (existing id) a plugin panel. `window = "all"`
+    /// renders it in every window; otherwise it lives in the active window and follows focus.
+    /// Returns the panel id. Corner/scope are fixed at creation.
     func luaPanelSet(_ lines: [PanelLine], _ opts: PanelOpts) -> Int {
-        if opts.id > 0, let panel = luaPanels[opts.id] {
-            panel.update(title: opts.title, lines: lines).forEach { luaUnref($0) }   // free old click refs
-            return opts.id
+        let id: Int
+        if opts.id > 0 { id = opts.id } else { luaPanelCounter += 1; id = luaPanelCounter }
+        // Free the click refs of the spec we're replacing (the new lines carry fresh refs).
+        let oldRefs = luaPanelSpecs[id]?.lines.compactMap(\.clickRef) ?? []
+        var opts = opts; opts.id = id
+        luaPanelSpecs[id] = PanelSpec(lines: lines, opts: opts)
+        renderPanels()
+        oldRefs.forEach { luaUnref($0) }   // after re-render, so live overlays no longer hold them
+        return id
+    }
+
+    /// Reconcile panel overlays against the specs: each spec renders into its target windows
+    /// (all, or just the active one), updating in place and removing overlays from windows it
+    /// no longer targets (e.g. an active-scoped panel when focus moves). Also prunes overlays
+    /// for closed windows. Called on panel set/update and whenever the active window changes.
+    func renderPanels() {
+        let live = Set(windows.map(ObjectIdentifier.init))
+        for id in Array(panelViews.keys) {
+            for (wid, ov) in panelViews[id] ?? [:] where !live.contains(wid) {
+                ov.removeFromSuperview(); panelViews[id]?[wid] = nil
+            }
         }
-        guard let host = active?.controller.window?.contentView else { return 0 }
-        let panel = PanelOverlay(theme: theme, lines: lines, opts: opts)
-        host.addSubview(panel)
-        panel.pin(into: host)
-        luaPanelCounter += 1
-        luaPanels[luaPanelCounter] = panel
-        return luaPanelCounter
+        for (id, spec) in luaPanelSpecs {
+            let targets = spec.opts.allWindows ? windows : [active].compactMap { $0 }
+            let targetIDs = Set(targets.map(ObjectIdentifier.init))
+            for (wid, ov) in panelViews[id] ?? [:] where !targetIDs.contains(wid) {
+                ov.removeFromSuperview(); panelViews[id]?[wid] = nil    // moved away (active panel)
+            }
+            for win in targets {
+                let wid = ObjectIdentifier(win)
+                guard let host = win.controller.window?.contentView else { continue }
+                if let ov = panelViews[id]?[wid] {
+                    _ = ov.update(title: spec.opts.title, lines: spec.lines)   // refs managed at spec level
+                } else {
+                    let ov = PanelOverlay(theme: theme, lines: spec.lines, opts: spec.opts)
+                    host.addSubview(ov); ov.pin(into: host)
+                    panelViews[id, default: [:]][wid] = ov
+                }
+            }
+        }
     }
 
     /// halo.prompt: free-text input overlay; call the Lua ref with the typed text (or free
@@ -287,17 +323,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         luaSetStatus = { [weak self] s in self?.windows.forEach { $0.controller.setLuaStatus(s) } }
         luaPanel = { [weak self] lines, opts in self?.luaPanelSet(lines, opts) ?? 0 }
         luaClosePanel = { [weak self] id in
-            if let p = self?.luaPanels[id] { p.clickRefs.forEach { luaUnref($0) }; p.removeFromSuperview() }
-            self?.luaPanels[id] = nil }
+            guard let self else { return }
+            self.luaPanelSpecs[id]?.lines.compactMap(\.clickRef).forEach { luaUnref($0) }
+            self.luaPanelSpecs[id] = nil
+            (self.panelViews[id] ?? [:]).values.forEach { $0.removeFromSuperview() }
+            self.panelViews[id] = nil }
         luaClearPanels = { [weak self] in
-            self?.luaPanels.values.forEach { p in p.clickRefs.forEach { luaUnref($0) }; p.removeFromSuperview() }
-            self?.luaPanels.removeAll() }
+            guard let self else { return }
+            self.luaPanelSpecs.values.flatMap { $0.lines }.compactMap(\.clickRef).forEach { luaUnref($0) }
+            self.luaPanelSpecs.removeAll()
+            self.panelViews.values.flatMap { $0.values }.forEach { $0.removeFromSuperview() }
+            self.panelViews.removeAll() }
         luaShowPrompt = { [weak self] msg, ref in self?.showPrompt(msg, ref) }
-        LuaRuntime.shared.start()   // embedded Lua: run ~/.config/halo/init.lua
-        // config-in-Lua: if init.lua set any halo-* keys, fold them in (Lua wins) + re-theme.
+        LuaRuntime.shared.start()   // run init.lua + plugins (builds plugin UI on the window)
+        // config-in-Lua: fold halo.set() overrides in (Lua wins) + re-theme. The plugin UI built
+        // above used the pre-Lua theme, so rebuild it against the applied theme — otherwise
+        // load-time panels/buttons keep the old accent until a manual reload.
         if !luaConfigOverrides.isEmpty {
             theme = GhosttyApp.shared.reloadConfig()
             windows.forEach { $0.applyTheme(theme) }
+            LuaRuntime.shared.start()   // rebuild plugin UI with the applied theme
         }
 
         installKeybinds()

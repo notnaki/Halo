@@ -50,6 +50,15 @@ final class SettingsWindowController: NSWindowController {
         surface.target = self; surface.action = #selector(surfaceChanged(_:))
         stack.addArrangedSubview(row("Surface", surface, key: "halo-surface"))
 
+        // Terminal background = ghostty's own `background` key (what libghostty paints
+        // behind text). Distinct from Surface (Halo's chrome). Applies on Reload.
+        let termBG = NSColorWell()
+        termBG.color = GhosttyApp.shared.settings["background"]
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) }
+            .flatMap(PanelOverlay.hexColor) ?? theme.background
+        termBG.target = self; termBG.action = #selector(termBGChanged(_:))
+        stack.addArrangedSubview(row("Terminal bg", termBG, key: "background"))
+
         stack.addArrangedSubview(row("Font", fontPopup(), key: "halo-font-family"))
 
         stack.addArrangedSubview(row("Sidebar width",
@@ -72,6 +81,20 @@ final class SettingsWindowController: NSWindowController {
         ])
         btns.orientation = .horizontal; btns.spacing = 8
         stack.addArrangedSubview(btns)
+
+        // Plugins — enable/disable installed Lua plugins (reloads on toggle).
+        let installed = LuaRuntime.shared.installedPlugins()
+        if !installed.isEmpty {
+            let ph = NSTextField(labelWithString: "Plugins")
+            ph.font = .boldSystemFont(ofSize: 12)
+            stack.addArrangedSubview(ph)
+            let disabled = LuaRuntime.shared.disabledPlugins()
+            for name in installed {
+                let cb = NSButton(checkboxWithTitle: name, target: self, action: #selector(pluginToggled(_:)))
+                cb.state = disabled.contains(name) ? .off : .on
+                stack.addArrangedSubview(cb)
+            }
+        }
 
         // ── Full config editor — accepts ANY ghostty key (libghostty parses the
         // whole file), so this is the complete config surface, not just halo-*.
@@ -174,6 +197,7 @@ final class SettingsWindowController: NSWindowController {
     // Each control persists immediately to Halo's config.
     @objc private func accentChanged(_ s: NSColorWell)  { setHaloConfigKey("halo-accent", hexString(s.color)) }
     @objc private func surfaceChanged(_ s: NSColorWell) { setHaloConfigKey("halo-surface", hexString(s.color)) }
+    @objc private func termBGChanged(_ s: NSColorWell)  { setHaloConfigKey("background", hexString(s.color)); onReload() }
     @objc private func sidebarChanged(_ s: NSSlider) {
         setHaloConfigKey("halo-sidebar-width", "\(Int(s.doubleValue))")
         onSidebarWidth(CGFloat(s.doubleValue))   // live
@@ -211,6 +235,11 @@ final class SettingsWindowController: NSWindowController {
         guard a.runModal() == .alertFirstButtonReturn else { return }
         onReset()
         configView?.string = currentConfigText()
+    }
+
+    @objc private func pluginToggled(_ b: NSButton) {
+        LuaRuntime.shared.setPluginEnabled(b.title, b.state == .on)
+        onReload()
     }
 
     @objc private func importTapped() { onImport() }
