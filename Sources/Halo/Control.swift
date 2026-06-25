@@ -8,7 +8,7 @@ func controlSocketPath() -> String {
     return base + "/control.sock"
 }
 
-let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "kill", "new-window", "state", "select", "rename", "project", "notify", "run"]
+let controlVerbs: Set<String> = ["split", "new-pane", "close", "focus", "zoom", "send-keys", "capture", "list", "open", "tab", "worktree", "browser", "reload", "search", "kill", "new-window", "state", "select", "rename", "project", "notify", "run", "plugins"]
 
 // MARK: - Socket helpers
 
@@ -134,6 +134,12 @@ final class ControlServer: @unchecked Sendable {
             guard let name = args.first else { return ["ok": false, "error": "run: <command> required"] }
             return luaRunCommand(name) ? ["ok": true, "ran": name]
                                        : ["ok": false, "error": "no Lua command: \(name)"]
+        case "plugins":
+            switch args.first {
+            case "sync":         return ["ok": true, "plugins": LuaRuntime.shared.syncPlugins()]
+            case "list", .none:  return ["ok": true, "plugins": LuaRuntime.shared.installedPlugins()]
+            default:             return ["ok": false, "error": "plugins: list|sync"]
+            }
         case "new-window":
             onNewWindow?()
             return ["ok": true]
@@ -287,6 +293,8 @@ func runControlCLI(_ args: [String]) -> Int32 {
 
     if verb == "list", let panes = obj["panes"] as? [Any] {
         for p in panes { print(p) }
+    } else if verb == "plugins", let names = obj["plugins"] as? [String] {
+        if names.isEmpty { print("(no plugins)") } else { for n in names { print(n) } }
     } else if verb == "state" {
         if let d = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
            let s = String(data: d, encoding: .utf8) { print(s) }
@@ -326,6 +334,7 @@ func printUsage() {
       reload                                re-read the config and apply colors/font/theme live
       notify <message>                      show a toast banner in the active window
       run <name>                            run a Lua command registered via halo.command
+      plugins [list|sync]                   list installed Lua plugins, or git-pull + reload them
       state                                 dump all windows→projects→sessions→panes as JSON
       select <project> <session>            switch the active window to a session (0-based)
       rename <name>                         rename the active session

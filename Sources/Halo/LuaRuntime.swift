@@ -14,6 +14,7 @@ nonisolated(unsafe) var luaEvents: [String: [Int32]] = [:]           // event �
 nonisolated(unsafe) var luaBinds: [(spec: String, ref: Int32)] = []  // "cmd+shift+p" → registry ref
 nonisolated(unsafe) var luaActiveInfo: () -> (cwd: String, title: String, paneID: String)? = { nil }
 nonisolated(unsafe) var luaSendText: (String) -> Void = { _ in }
+nonisolated(unsafe) var luaPluginSpecs: [String] = []                 // declared via halo.plugin(...)
 
 // Pop the function at stack slot 2 into the registry and return its ref (for on/command/bind).
 private func refFunctionArg2(_ L: OpaquePointer?) -> Int32 {
@@ -44,6 +45,18 @@ private func l_halo_bind(_ L: OpaquePointer?) -> Int32 {
 private func l_halo_send(_ L: OpaquePointer?) -> Int32 {
     if let c = luaL_checklstring(L, 1, nil) { luaSendText(String(cString: c)) }
     return 0
+}
+private func l_halo_plugin(_ L: OpaquePointer?) -> Int32 {
+    if let c = luaL_checklstring(L, 1, nil) { luaPluginSpecs.append(String(cString: c)) }
+    return 0
+}
+
+/// git-clone a plugin (run off-main). `spec` is "owner/repo" (→ GitHub) or a full URL.
+func gitClonePlugin(_ spec: String, to dir: String) -> Bool {
+    let url = (spec.hasPrefix("http") || spec.hasPrefix("git@")) ? spec : "https://github.com/\(spec).git"
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    p.arguments = ["clone", "--depth", "1", url, dir]
+    do { try p.run(); p.waitUntilExit(); return p.terminationStatus == 0 } catch { return false }
 }
 private func l_halo_active(_ L: OpaquePointer?) -> Int32 {
     guard let info = luaActiveInfo() else { lua_pushnil(L); return 1 }
@@ -87,12 +100,14 @@ func luaRunCommand(_ name: String) -> Bool {
 @MainActor
 final class LuaRuntime {
     static let shared = LuaRuntime()
-    static var initScriptPath: String { NSHomeDirectory() + "/.config/halo/init.lua" }
+    static var configDir: String { NSHomeDirectory() + "/.config/halo" }
+    static var initScriptPath: String { configDir + "/init.lua" }
+    static var pluginsDir: String { configDir + "/plugins" }
 
     func start() {
         if let old = luaState { lua_close(old); luaState = nil }
         // Drop refs from the previous load (reload re-registers everything fresh).
-        luaCommands.removeAll(); luaEvents.removeAll(); luaBinds.removeAll()
+        luaCommands.removeAll(); luaEvents.removeAll(); luaBinds.removeAll(); luaPluginSpecs.removeAll()
         guard let L = luaL_newstate() else { return }
         luaState = L
         luaL_openlibs(L)
@@ -106,9 +121,86 @@ final class LuaRuntime {
         reg("bind",    l_halo_bind)
         reg("send",    l_halo_send)
         reg("active",  l_halo_active)
+        reg("plugin",  l_halo_plugin)
         lua_setglobal(L, "halo")
         runInit()
-        luaFire("config-reloaded")   // handlers registered in init.lua can react to (re)load
+        loadPlugins()                // declared (halo.plugin) + drop-in plugins/*/
+        luaFire("config-reloaded")   // handlers registered in init.lua/plugins react to (re)load
+    }
+
+    /// Load plugins: declared via `halo.plugin("owner/repo")` (cloned to plugins/ if
+    /// missing) plus any drop-in `plugins/*/` folder. Each plugin's `init.lua` (or
+    /// `plugin/init.lua`) runs with the same `halo` global, so it registers commands /
+    /// events / binds like init.lua does.
+    private func loadPlugins() {
+        let base = Self.pluginsDir
+        try? FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        var handled = Set<String>()
+        for spec in luaPluginSpecs {
+            let name = ((spec as NSString).lastPathComponent as NSString)
+                .deletingPathExtension   // strip a trailing .git
+            let dir = base + "/" + name
+            handled.insert(dir)
+            if FileManager.default.fileExists(atPath: dir) {
+                loadPluginEntry(dir)
+            } else {
+                luaNotify("installing plugin \(spec)…")
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let ok = gitClonePlugin(spec, to: dir)
+                    DispatchQueue.main.async {
+                        if ok { self.loadPluginEntry(dir); luaNotify("plugin \(name) installed") }
+                        else  { luaNotify("plugin \(spec): clone failed") }
+                    }
+                }
+            }
+        }
+        // Drop-in: any plugins/*/ folder not already declared.
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: base)) ?? []
+        for e in entries.sorted() {
+            let dir = base + "/" + e
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue,
+                  !handled.contains(dir) else { continue }
+            loadPluginEntry(dir)
+        }
+    }
+
+    /// Run a plugin's entry script (`<dir>/init.lua` or `<dir>/plugin/init.lua`).
+    private func loadPluginEntry(_ dir: String) {
+        guard let L = luaState else { return }
+        let entry = [dir + "/init.lua", dir + "/plugin/init.lua"]
+            .first { FileManager.default.fileExists(atPath: $0) }
+        guard let entry else { return }
+        let loaded = entry.withCString { luaL_loadfilex(L, $0, nil) }
+        if loaded != 0 || lua_pcallk(L, 0, 0, 0, 0, nil) != 0 {
+            let err = lua_tolstring(L, -1, nil).map { String(cString: $0) } ?? "error"
+            luaNotify("plugin \((dir as NSString).lastPathComponent): \(err)")
+            lua_settop(L, -2)
+        }
+    }
+
+    /// Names of installed plugin folders (for `halo plugins`).
+    func installedPlugins() -> [String] {
+        let base = Self.pluginsDir
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: base)) ?? []
+        return entries.filter { e in
+            var d: ObjCBool = false
+            return FileManager.default.fileExists(atPath: base + "/" + e, isDirectory: &d) && d.boolValue
+        }.sorted()
+    }
+
+    /// `git pull` every installed plugin, then reload so updates take effect.
+    @discardableResult
+    func syncPlugins() -> [String] {
+        let base = Self.pluginsDir
+        let names = installedPlugins()
+        for n in names {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            p.arguments = ["-C", base + "/" + n, "pull", "--ff-only", "--quiet"]
+            try? p.run(); p.waitUntilExit()
+        }
+        start()
+        return names
     }
 
     private func runInit() {
