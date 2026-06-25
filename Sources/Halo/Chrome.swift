@@ -36,6 +36,7 @@ final class HaloWindowController: NSWindowController {
     private let onSetProjectColor: (Int, NSColor?) -> Void
     private let onRemoveProject:   (Int) -> Void
     private let onNewWorktree:     (Int, String) -> Void
+    private let onChangeProjectDir: () -> Void
 
     private var sidebar: NSView!
     private var sidebarWidth: NSLayoutConstraint!
@@ -64,7 +65,8 @@ final class HaloWindowController: NSWindowController {
          onRenameSession:   @escaping (Int, Int, String?) -> Void = { _, _, _ in },
          onSetProjectColor: @escaping (Int, NSColor?) -> Void     = { _, _ in },
          onRemoveProject:   @escaping (Int) -> Void          = { _ in },
-         onNewWorktree:     @escaping (Int, String) -> Void  = { _, _ in }) {
+         onNewWorktree:     @escaping (Int, String) -> Void  = { _, _ in },
+         onChangeProjectDir: @escaping () -> Void            = {}) {
         self.theme = theme
         self.surface = theme.background
         // Restore the dragged sidebar width if saved, else the config default.
@@ -80,6 +82,7 @@ final class HaloWindowController: NSWindowController {
         self.onSetProjectColor = onSetProjectColor
         self.onRemoveProject   = onRemoveProject
         self.onNewWorktree     = onNewWorktree
+        self.onChangeProjectDir = onChangeProjectDir
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 680),
@@ -782,12 +785,18 @@ final class HaloWindowController: NSWindowController {
         btn.action = #selector(toggleSidebarAction)
         toggleButton = btn
 
-        let folder = NSImageView()
+        // Folder icon → change the active project's default directory.
+        let folder = BlockButton(action: { [weak self] in self?.onChangeProjectDir() })
         folder.translatesAutoresizingMaskIntoConstraints = false
+        folder.isBordered = false
+        folder.bezelStyle = .regularSquare
+        folder.title = ""
+        folder.imagePosition = .imageOnly
         let fcfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        folder.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)?
+        folder.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Change project folder")?
             .withSymbolConfiguration(fcfg)
         folder.contentTintColor = txt(.faint)
+        folder.toolTip = "Change the project's default folder"
 
         dirLabel = NSTextField(labelWithString: "")
         dirLabel.translatesAutoresizingMaskIntoConstraints = false

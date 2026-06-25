@@ -30,19 +30,22 @@ final class Session {
     private static let ringCap = 256 * 1024
     private(set) var ring = Data()
 
-    init?(paneID: String, cols rawCols: Int32, rows rawRows: Int32) {
+    init?(paneID: String, cols rawCols: Int32, rows rawRows: Int32, cwd: String? = nil) {
         // Clamp to a sane minimum. A pane created before its window lays out reports a
         // 0×0 size; a 0-sized PTY is rejected by some shells. The real size arrives via
         // the first resize.
         let cols = rawCols > 0 ? rawCols : 80
         let rows = rawRows > 0 ? rawRows : 24
-        self.paneID = paneID; self.cols = cols; self.rows = rows
+        self.paneID = paneID; self.cols = cols; self.rows = rows; self.cwd = cwd
         // forkpty a login shell.
         var master: Int32 = 0
         var ws = winsize(ws_row: UInt16(rows), ws_col: UInt16(cols), ws_xpixel: 0, ws_ypixel: 0)
         let child = forkpty(&master, nil, nil, &ws)
         if child < 0 { return nil }
         if child == 0 {
+            // Start the shell in the requested directory (the project/session dir). A bad
+            // path just leaves the child in its inherited cwd — the shell still spawns.
+            if let cwd, !cwd.isEmpty { cwd.withCString { _ = chdir($0) } }
             let shell = getenv("SHELL").flatMap { String(cString: $0) } ?? "/bin/zsh"
             // execl is variadic (unavailable to Swift); build an explicit argv for execv.
             // Login shell: argv[0] = shell, argv[1] = "-l".

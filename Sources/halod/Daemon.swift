@@ -149,7 +149,7 @@ final class Daemon {
 
     private func handle(_ frame: ClientFrame, from fd: Int32) {
         switch frame {
-        case let .hello(paneID, cols, rows):
+        case let .hello(paneID, cols, rows, cwd):
             // No server-side version gate: the server unconditionally advertises its
             // version via helloAck (below); the CLIENT (halo-attach, Task 3.8) compares
             // helloAck.version to its own muxProtocolVersion and bails on mismatch. This
@@ -157,7 +157,7 @@ final class Daemon {
             let s: Session
             if let existing = sessions[paneID] { s = existing }
             else {
-                guard let fresh = Session(paneID: paneID, cols: Int32(cols), rows: Int32(rows)) else {
+                guard let fresh = Session(paneID: paneID, cols: Int32(cols), rows: Int32(rows), cwd: cwd) else {
                     if !sendFrame(fd, encode(ServerFrame.exited(status: 1))) { closeClient(fd) }
                     return
                 }

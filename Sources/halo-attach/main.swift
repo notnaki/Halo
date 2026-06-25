@@ -145,7 +145,10 @@ func writeOut(_ data: Data) {
     }
 }
 let (cols0, rows0) = currentWinsize()
-send(.hello(paneID: paneID, cols: cols0, rows: rows0))
+// Our cwd is what libghostty set via config.working_directory (the project/session dir).
+// The daemon chdirs the shell here when it first creates this session.
+let spawnCwd = FileManager.default.currentDirectoryPath
+send(.hello(paneID: paneID, cols: cols0, rows: rows0, cwd: spawnCwd))
 
 // ── SIGWINCH → resize ────────────────────────────────────────────────────────
 // C signal handlers can't capture Swift state; stash the socket fd globally.

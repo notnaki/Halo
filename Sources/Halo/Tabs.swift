@@ -117,7 +117,10 @@ final class Workspace {
 
     private func addSession(_ p: Int, cwd: String?) {
         guard projs.indices.contains(p) else { return }
-        let tree = makeTree(cwd: cwd)
+        // Default to the project's directory when no explicit cwd is given, so new sessions
+        // (project "+", ⌘T, `tab new`) open in the project's default dir.
+        let dir = cwd ?? (projs[p].path.isEmpty ? NSHomeDirectory() : projs[p].path)
+        let tree = makeTree(cwd: dir)
         projs[p].sessions.append(tree)
         projs[p].expanded = true
         activeP = p
@@ -127,7 +130,18 @@ final class Workspace {
     }
 
     func newSession(_ p: Int) {
-        addSession(p, cwd: NSHomeDirectory())
+        addSession(p, cwd: nil)   // addSession defaults to the project's dir
+    }
+
+    /// Change a project's default directory (used for new sessions). Existing sessions keep
+    /// their own cwd.
+    func setProjectDir(_ p: Int, _ path: String) {
+        guard projs.indices.contains(p) else { return }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        projs[p].path = trimmed
+        saveProjects()
+        handleChange()
     }
 
     func newWorktreeSession(_ p: Int, branch: String, base: String? = nil) {

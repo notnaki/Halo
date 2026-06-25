@@ -71,7 +71,22 @@ final class WindowContext {
             onRenameSession:   { [weak ws] p, s, name in ws?.renameSession(p, s, name) },
             onSetProjectColor: { [weak ws] p, color in ws?.setProjectColor(p, color) },
             onRemoveProject:   { [weak ws] p in ws?.removeProject(p) },
-            onNewWorktree:     { [weak ws] p, branch in ws?.newWorktreeSession(p, branch: branch) })
+            onNewWorktree:     { [weak ws] p, branch in ws?.newWorktreeSession(p, branch: branch) },
+            onChangeProjectDir: { [weak ws] in
+                                            guard let ws else { return }
+                                            let panel = NSOpenPanel()
+                                            panel.canChooseDirectories = true
+                                            panel.canChooseFiles = false
+                                            panel.allowsMultipleSelection = false
+                                            panel.prompt = "Set Folder"
+                                            panel.message = "Default folder for new sessions in this project"
+                                            let cur = ws.projs.indices.contains(ws.activeP) ? ws.projs[ws.activeP].path : NSHomeDirectory()
+                                            panel.directoryURL = URL(fileURLWithPath: cur)
+                                            let pick = { (r: NSApplication.ModalResponse) in
+                                                if r == .OK, let url = panel.url { ws.setProjectDir(ws.activeP, url.path) }
+                                            }
+                                            if let win = ws.container.window { panel.beginSheetModal(for: win, completionHandler: pick) }
+                                            else { pick(panel.runModal()) } })
 
         // self is fully initialized past this point. Cross-window refresh + persistence
         // flow through store.broadcast (wired by AppDelegate), not a per-window onChange.

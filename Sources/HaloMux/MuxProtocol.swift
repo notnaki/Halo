@@ -1,6 +1,6 @@
 import Foundation
 
-public let muxProtocolVersion = 3
+public let muxProtocolVersion = 4
 
 public struct SessionInfo: Codable, Equatable {
     public let id: String
@@ -14,7 +14,7 @@ public struct SessionInfo: Codable, Equatable {
 }
 
 public enum ClientFrame: Equatable {
-    case hello(paneID: String, cols: Int, rows: Int)
+    case hello(paneID: String, cols: Int, rows: Int, cwd: String? = nil)
     case input(Data)
     case resize(cols: Int, rows: Int)
     case detach
@@ -61,8 +61,9 @@ private func frame(_ tag: UInt8, _ payload: Data) -> Data {
 public func encode(_ f: ClientFrame) -> Data {
     var p = Data()
     switch f {
-    case let .hello(paneID, cols, rows):
+    case let .hello(paneID, cols, rows, cwd):
         putStr(paneID, into: &p); putU32(UInt32(cols), into: &p); putU32(UInt32(rows), into: &p)
+        putOptStr(cwd, into: &p)   // v4: spawn cwd (older daemons stop reading after rows)
         return frame(0x01, p)
     case let .input(data):
         putField(data, into: &p); return frame(0x02, p)
@@ -122,13 +123,17 @@ private struct Reader {
     mutating func str() -> String { String(decoding: field(), as: UTF8.self) }
     mutating func byte() -> UInt8 { let b = d[d.startIndex + i]; i += 1; return b }
     mutating func optStr() -> String? { byte() == 1 ? str() : nil }
+    func remaining() -> Int { d.count - i }
 }
 
 public func decodeClientFrame(from buf: inout Data) -> ClientFrame? {
     guard let (tag, payload) = pullFrame(from: &buf) else { return nil }
     var r = Reader(payload)
     switch tag {
-    case 0x01: let id = r.str(); let c = Int(r.u32()); let rr = Int(r.u32()); return .hello(paneID: id, cols: c, rows: rr)
+    case 0x01:
+        let id = r.str(); let c = Int(r.u32()); let rr = Int(r.u32())
+        let cwd = r.remaining() > 0 ? r.optStr() : nil   // v4 field; tolerate v3 clients without it
+        return .hello(paneID: id, cols: c, rows: rr, cwd: cwd)
     case 0x02: return .input(r.field())
     case 0x03: return .resize(cols: Int(r.u32()), rows: Int(r.u32()))
     case 0x04: return .detach
@@ -161,7 +166,8 @@ public func decodeServerFrame(from buf: inout Data) -> ServerFrame? {
 public func muxProtocolSelfCheck() {
     // Round-trip every ClientFrame case.
     let clientCases: [ClientFrame] = [
-        .hello(paneID: "abc-123", cols: 80, rows: 24),
+        .hello(paneID: "abc-123", cols: 80, rows: 24, cwd: "/tmp/x"),
+        .hello(paneID: "no-cwd", cols: 80, rows: 24, cwd: nil),
         .input(Data([0x01, 0x02, 0xff, 0x00])),
         .resize(cols: 120, rows: 40),
         .detach, .kill, .list,

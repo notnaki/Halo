@@ -201,7 +201,7 @@ final class ControlServer: @unchecked Sendable {
             return ["ok": true, "path": path]
         case "tab":
             switch args.first {
-            case "new": workspace.newTab(cwd: argValue(args, "--cwd") ?? tree.focusedCwd)
+            case "new": workspace.newTab(cwd: argValue(args, "--cwd"))   // nil → project's default dir
             case "next", .none: workspace.nextTab()
             case "prev": workspace.prevTab()
             case "close": workspace.closeTab()
@@ -247,13 +247,17 @@ final class ControlServer: @unchecked Sendable {
             case "rename":
                 guard args.count >= 2 else { return ["ok": false, "error": "project rename <name>"] }
                 workspace.renameProject(workspace.activeP, args[1])
+            case "dir":
+                // `project dir [PATH]` — change the active project's default dir (PATH or caller's cwd).
+                guard args.count >= 2, !args[1].hasPrefix("--") else { return ["ok": false, "error": "project dir <path>"] }
+                workspace.setProjectDir(workspace.activeP, args[1])
             case "remove":
                 workspace.removeProject(workspace.activeP)
             case "color":
                 guard args.count >= 2 else { return ["ok": false, "error": "project color <#hex|none>"] }
                 workspace.setProjectColor(workspace.activeP, args[1] == "none" ? nil : ghosttyColor(args[1]))
             default:
-                return ["ok": false, "error": "project: new [PATH] [--name X] | rename <name> | remove | color <#hex|none>"]
+                return ["ok": false, "error": "project: new [PATH] [--name X] | dir [PATH] | rename <name> | remove | color <#hex|none>"]
             }
             return ["ok": true, "project": workspace.activeP]
         default:
@@ -279,9 +283,10 @@ func controlSocketAlive() -> Bool {
 func runControlCLI(_ args: [String]) -> Int32 {
     guard let verb = args.first else { return 1 }
     var rest = Array(args.dropFirst())
-    // `halo project new` with no PATH → default to the caller's working directory (resolved
+    // `halo project new|dir` with no PATH → default to the caller's working directory (resolved
     // here, since the app's cwd differs from the shell's). An explicit path is left untouched.
-    if verb == "project", rest.first == "new", !(rest.count >= 2 && !rest[1].hasPrefix("--")) {
+    if verb == "project", rest.first == "new" || rest.first == "dir",
+       !(rest.count >= 2 && !rest[1].hasPrefix("--")) {
         rest.insert(FileManager.default.currentDirectoryPath, at: 1)
     }
 
@@ -384,7 +389,7 @@ func printUsage() {
       sessions                              readable session list with select indices (▸ = active)
       select <project> <session>            switch the active window to a session (0-based)
       rename <name>                         rename the active session
-      project new [PATH] [--name X]|rename <name>|remove|color <#hex|none>   manage projects (new: PATH or caller's cwd)
+      project new [PATH] [--name X]|dir [PATH]|rename <name>|remove|color <#hex|none>   manage projects (new/dir: PATH or caller's cwd)
       kill <id>                             terminate a session's shell under the daemon
 
     Config (in your ghostty config; libghostty ignores the halo- keys):
