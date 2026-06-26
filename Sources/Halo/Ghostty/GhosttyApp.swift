@@ -317,6 +317,7 @@ final class GhosttyApp {
         nonisolated(unsafe) let ud = userdata
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
+                guard TerminalPane.isLive(ud) else { return }   // pane closed (Cmd-W) before this ran
                 let pane = Unmanaged<TerminalPane>.fromOpaque(ud).takeUnretainedValue()
                 // Shell exited on its own → session-exited. Suppressed when the user
                 // intentionally closed it (session-closed already fired) or when a

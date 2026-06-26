@@ -138,6 +138,7 @@ look, so an untouched config changes nothing.
 | `halo-divider-width` | 8 | split divider grab width (1px hairline drawn) |
 | `halo-projects` | — | comma-separated project paths to preload |
 | `halo-persist` | true | run shells under `halod` (survive quit); `false` = plain shells |
+| `halo-persist-scrollback` | false | mirror scrollback to disk so it survives a daemon restart. **Off by default** — terminal output can contain secrets (see [SECURITY.md](SECURITY.md)) |
 | `halo-prefix` | ctrl+b | prefix key for tmux-style mode; empty = disabled |
 | `halo-prefix-bind` | — | override prefix bindings: `key=action, …` |
 

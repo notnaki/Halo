@@ -14,6 +14,22 @@ final class Daemon {
     private var subscriberSession: [Int32: String] = [:]
     // Subscribers that arrived before their session existed, waiting to be bound on .hello.
     private var pendingSubscribers: [String: [Int32]] = [:]
+    // Persist scrollback to disk? Off by default; read once from config at startup.
+    private let logEnabled = Daemon.scrollbackEnabled()
+
+    /// Read `halo-persist-scrollback` from the Halo config (XDG-aware). Default false —
+    /// terminal output can contain secrets, so on-disk persistence is strictly opt-in.
+    private static func scrollbackEnabled() -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        let path = (env["XDG_CONFIG_HOME"].map { $0 + "/halo/config" }) ?? (NSHomeDirectory() + "/.config/halo/config")
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        for line in text.split(whereSeparator: \.isNewline) {
+            let kv = line.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2, kv[0].trimmingCharacters(in: .whitespaces) == "halo-persist-scrollback" else { continue }
+            return kv[1].trimmingCharacters(in: .whitespaces) == "true"
+        }
+        return false
+    }
 
     func run() {
         MuxPaths.ensureDirs()
@@ -170,7 +186,7 @@ final class Daemon {
             let s: Session
             if let existing = sessions[paneID] { s = existing }
             else {
-                guard let fresh = Session(paneID: paneID, cols: Int32(cols), rows: Int32(rows), cwd: cwd) else {
+                guard let fresh = Session(paneID: paneID, cols: Int32(cols), rows: Int32(rows), cwd: cwd, logEnabled: logEnabled) else {
                     if !sendFrame(fd, encode(ServerFrame.exited(status: 1))) { closeClient(fd) }
                     return
                 }

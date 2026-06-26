@@ -581,7 +581,7 @@ final class LuaRuntime {
             let dir = base + "/" + name
             guard !FileManager.default.fileExists(atPath: dir) else { continue }
             let repo = spec.repo, ref = spec.ref
-            luaNotify("installing plugin \(name)…")
+            luaNotify("installing plugin \(name) — runs its own code (see SECURITY.md)")
             DispatchQueue.global(qos: .userInitiated).async {
                 let commit = gitClonePlugin(repo, to: dir, ref: ref)
                 DispatchQueue.main.async {

@@ -41,7 +41,12 @@ final class Session {
     private var logBytes = 0
     private static let logCap = 512 * 1024
 
-    init?(paneID: String, cols rawCols: Int32, rows rawRows: Int32, cwd: String? = nil) {
+    /// Whether to persist scrollback to disk (off by default — terminal output can hold
+    /// secrets; opt in via `halo-persist-scrollback = true`). Read once by the daemon.
+    private let logEnabled: Bool
+
+    init?(paneID: String, cols rawCols: Int32, rows rawRows: Int32, cwd: String? = nil, logEnabled: Bool = false) {
+        self.logEnabled = logEnabled
         // Clamp to a sane minimum. A pane created before its window lays out reports a
         // 0×0 size; a 0-sized PTY is rejected by some shells. The real size arrives via
         // the first resize.
@@ -78,6 +83,7 @@ final class Session {
     /// Seed the replay ring from the prior on-disk log (scrollback from before a daemon
     /// restart), then open the log for append. The new shell's output continues the file.
     private func seedRingAndOpenLog() {
+        guard logEnabled else { return }   // opt-in: no on-disk scrollback by default
         let path = MuxPaths.sessionLog(paneID)
         if let data = FileManager.default.contents(atPath: path), !data.isEmpty {
             ring = data.count > Session.ringCap ? Data(data.suffix(Session.ringCap)) : data
