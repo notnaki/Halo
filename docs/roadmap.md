@@ -79,6 +79,11 @@ own socket — used for that test, kept because it's generally useful.
   `examples/starter/` (a runnable tour plugin) + `docs/writing-plugins.md` (full
   API reference). Remaining: refresh the live `vesta-site` docs.html to match, and
   sidebar empty states.
+  - **First-open full-screen intro animation** _(planned — do next)_: a cinematic
+    first-launch sequence like Arc / Orion browsers. Reuse the site's pixelated
+    V-flame corruption + white→pink reveal as the motif so the app intro and the
+    landing page share one identity. Full-screen overlay shown once on first run
+    (gate on a `did-onboard` flag), skippable, respects reduced-motion.
 - **Config per-key live updates** — libghostty has no per-key setter; we
   write-file-and-reload (`.lua-overrides.conf`). Revisit only if reload latency bites.
 - **Two-window-restore behavior** — never verified what reopening with two windows
