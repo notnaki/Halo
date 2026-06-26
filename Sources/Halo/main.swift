@@ -106,7 +106,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         key.workspace.reconcile(preferLive: true)
         for w in windows where w !== key { w.workspace.reconcile(preferLive: false) }
         renderPanels()   // active-scoped panels follow focus; new windows pick up "all" panels
-        PaneOutputTap.shared.retarget(key.workspace.activeTree.focusedPaneID)  // pane-output follows focus
+        PaneOutputTap.shared.reconcile(allLivePaneIDs())   // pane-output taps every live pane
+    }
+
+    /// Every live pane's mux id, across all projects/sessions (pane-output subscribes to all).
+    func allLivePaneIDs() -> Set<String> {
+        Set((active?.workspace.projs ?? []).flatMap { $0.sessions.flatMap { $0.paneIDs } })
     }
 
     /// Show a `halo.pick` picker overlay in the key window; call the Lua ref with the
@@ -375,8 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.windows.forEach { $0.pollAttention() }
-                // Catches handler-set changes (reload) and sub-pane focus; no-op if unchanged.
-                PaneOutputTap.shared.retarget(self.active?.workspace.activeTree.focusedPaneID)
+                // Catches handler-set changes (reload) and new/closed panes; no-op if unchanged.
+                PaneOutputTap.shared.reconcile(self.allLivePaneIDs())
             }
         }
         NSApp.activate(ignoringOtherApps: true)
