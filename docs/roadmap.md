@@ -75,9 +75,10 @@ own socket — used for that test, kept because it's generally useful.
   like `disabled-plugins` (keeps user config untouched). Decided design; parked
   until there's a second user. A plugin is just a git repo + `init.lua`; sharing a
   URL already works.
-- **Onboarding** — starter plugin + "write your first plugin" doc page + sidebar
-  empty states. Deliberately LAST: the docs/starter should reflect the new
-  `pane-output` API and enriched primitives, so writing them earlier means redoing them.
+- **Onboarding** — _mostly done_ (feat/plugin-onboarding): shipped
+  `examples/starter/` (a runnable tour plugin) + `docs/writing-plugins.md` (full
+  API reference). Remaining: refresh the live `halo-site` docs.html to match, and
+  sidebar empty states.
 - **Config per-key live updates** — libghostty has no per-key setter; we
   write-file-and-reload (`.lua-overrides.conf`). Revisit only if reload latency bites.
 - **Two-window-restore behavior** — never verified what reopening with two windows
