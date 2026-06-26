@@ -109,6 +109,9 @@ final class PaneTree {
     private var zoomed = false
     private var zoomHidden: [(view: NSView, was: Bool)] = []
 
+    // Split ratios pending application after the tree is mounted + laid out (restore path).
+    private var pendingRatios: [(sv: HaloSplitView, ratio: Double)] = []
+
     /// Fired whenever focus moves or the focused pane's cwd/title changes.
     var onFocusChange: (() -> Void)?
     /// Fired when any pane in this tree rings the bell or fires a desktop notification.
@@ -142,6 +145,36 @@ final class PaneTree {
         focusedId = first.id
         installClickFocus()
         restyle()
+    }
+
+    /// Rebuild a session from a serialized split layout (windows.json). Builds the
+    /// NSSplitView tree directly (mirrors splitAndAttach's frame-based layout); each
+    /// leaf carries its own persisted paneID for daemon reattach. Divider ratios are
+    /// best-effort, applied after the tree is mounted (see applyPendingRatios).
+    init(theme: Theme, layout: [String: Any], name: String? = nil) {
+        self.theme = theme
+        self.paneID = PaneTree.firstLeafID(layout) ?? UUID().uuidString  // tree id = top-left leaf
+        self.name = normalizedSessionName(name)
+        root = NSView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = theme.background.cgColor
+        let child = buildNode(layout)
+        child.autoresizingMask = [.width, .height]
+        child.frame = root.bounds
+        root.addSubview(child)
+        focusedId = leaves.first?.id ?? 0
+        installClickFocus()
+        restyle()
+        applyPendingRatios()
+    }
+
+    /// The first terminal leaf's paneID in a serialized layout (DFS, so it skips a
+    /// browser top-left leaf — which has no paneID — and finds the next terminal).
+    private static func firstLeafID(_ node: [String: Any]) -> String? {
+        if let a = node["a"] as? [String: Any], let b = node["b"] as? [String: Any] {
+            return firstLeafID(a) ?? firstLeafID(b)
+        }
+        return node["paneID"] as? String
     }
 
     // Click a pane to focus it; pass the event through so the terminal still
@@ -228,11 +261,15 @@ final class PaneTree {
 
     /// Open a browser pane next to the focused pane (vertical split by default).
     func openBrowser(url: URL) {
-        let browser = BrowserPane(url: url, theme: theme)
+        splitAndAttach(makeBrowserLeaf(url: url), split: .vertical)
+    }
+
+    private func makeBrowserLeaf(url: URL) -> Leaf {
         let id = nextId; nextId += 1
-        let newLeaf = Leaf(id: id, content: browser, accent: theme.accent, surface: theme.background)
-        leaves.append(newLeaf)
-        splitAndAttach(newLeaf, split: .vertical)
+        let leaf = Leaf(id: id, content: BrowserPane(url: url, theme: theme),
+                        accent: theme.accent, surface: theme.background)
+        leaves.append(leaf)
+        return leaf
     }
 
     /// Every TerminalPane paneID currently live in this tree (for switcher
@@ -242,7 +279,7 @@ final class PaneTree {
     /// Explicit kill (prefix-x / menu): terminate the shell under halod, then close
     /// the pane locally. Distinct from Cmd-W, which only detaches.
     func killFocusedSession() {
-        if let pane = focused { MuxClient.kill(paneID: pane.paneID) }
+        if let pane = focused { TerminalPane.suppressExit(pane.paneID); MuxClient.kill(paneID: pane.paneID) }
         closeFocused()
     }
 
@@ -340,6 +377,77 @@ final class PaneTree {
     }
 
     private func leaf(_ id: Int) -> Leaf? { leaves.first { $0.id == id } }
+
+    // MARK: Split-layout (de)serialization — windows.json topology persistence
+
+    /// Serialize the split topology to a nested dict for windows.json:
+    /// a split is {vertical, ratio, a, b}; a terminal leaf is {paneID, cwd?};
+    /// a browser leaf is {browser: <url>}.
+    func serializeLayout() -> [String: Any] { nodeDict(root.subviews.first) }
+
+    private func nodeDict(_ v: NSView?) -> [String: Any] {
+        if let sv = v as? HaloSplitView, sv.arrangedSubviews.count == 2 {
+            let total = sv.isVertical ? sv.bounds.width : sv.bounds.height
+            let first = sv.isVertical ? sv.arrangedSubviews[0].frame.width
+                                      : sv.arrangedSubviews[0].frame.height
+            let ratio = total > 0 ? min(0.95, max(0.05, Double(first / total))) : 0.5
+            return ["vertical": sv.isVertical, "ratio": ratio,
+                    "a": nodeDict(sv.arrangedSubviews[0]),
+                    "b": nodeDict(sv.arrangedSubviews[1])]
+        }
+        if let leaf = v as? Leaf {
+            if let term = leaf.content as? TerminalPane {
+                var d: [String: Any] = ["paneID": term.paneID]
+                if let c = term.cwd { d["cwd"] = c }
+                return d
+            }
+            if let br = leaf.content as? BrowserPane, let u = br.webView.url {
+                return ["browser": u.absoluteString]
+            }
+        }
+        return [:]   // degenerate node → rebuilt as a fresh terminal leaf
+    }
+
+    /// Build a view subtree from a serialized layout node, registering leaves and
+    /// recording split ratios to apply once laid out.
+    private func buildNode(_ node: [String: Any]) -> NSView {
+        if let a = node["a"] as? [String: Any], let b = node["b"] as? [String: Any] {
+            let sv = HaloSplitView()
+            sv.isVertical = (node["vertical"] as? Bool) ?? false
+            sv.translatesAutoresizingMaskIntoConstraints = true
+            for child in [buildNode(a), buildNode(b)] {
+                child.translatesAutoresizingMaskIntoConstraints = true
+                child.autoresizingMask = [.width, .height]
+                sv.addArrangedSubview(child)
+            }
+            pendingRatios.append((sv, (node["ratio"] as? Double) ?? 0.5))
+            return sv
+        }
+        if let urlStr = node["browser"] as? String, let url = URL(string: urlStr) {
+            return makeBrowserLeaf(url: url)
+        }
+        return makeTerminalLeaf(cwd: node["cwd"] as? String,
+                                paneID: (node["paneID"] as? String) ?? UUID().uuidString)
+    }
+
+    /// Set divider positions from saved ratios. Frames are 0 until the tree is mounted
+    /// in a window, so retry on a short schedule; once extents are real the position
+    /// sticks. ponytail: best-effort — if never mounted, panes stay evenly split.
+    private func applyPendingRatios() {
+        guard !pendingRatios.isEmpty else { return }
+        let schedule = [0.0, 0.1, 0.3, 0.6]
+        for delay in schedule {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                for (sv, ratio) in self.pendingRatios.reversed() {   // outer splits first
+                    let extent = sv.isVertical ? sv.bounds.width : sv.bounds.height
+                    guard extent > 1 else { continue }
+                    sv.setPosition((extent - sv.dividerThickness) * CGFloat(ratio), ofDividerAt: 0)
+                }
+                if delay == schedule.last { self.pendingRatios.removeAll() }   // done; drop split refs
+            }
+        }
+    }
 
     private func makeTerminalLeaf(cwd: String?, paneID: String = UUID().uuidString) -> Leaf {
         let id = nextId; nextId += 1

@@ -28,6 +28,23 @@ import GhosttyKit
         liveLock.lock(); defer { liveLock.unlock() }; return live.contains(p)
     }
 
+    /// paneIDs for which `session-exited` must NOT fire: the user intentionally killed the
+    /// shell (we suppress, since `session-closed` already fired), or it already fired once
+    /// (latch against a duplicate close_surface). Guarded by liveLock; pruned in deinit.
+    private nonisolated(unsafe) static var silencedExits = Set<String>()
+    /// Mark a paneID's coming exit as intentional (call before MuxClient.kill).
+    nonisolated static func suppressExit(_ paneID: String) {
+        liveLock.lock(); silencedExits.insert(paneID); liveLock.unlock()
+    }
+    /// Returns true if `session-exited` should fire for this paneID; latches so a second
+    /// close_surface for the same pane is suppressed.
+    nonisolated static func shouldFireExit(_ paneID: String) -> Bool {
+        liveLock.lock(); defer { liveLock.unlock() }
+        let fire = !silencedExits.contains(paneID)
+        silencedExits.insert(paneID)
+        return fire
+    }
+
     /// Marked (preedit) text accumulator for IME, and a keyDown text accumulator.
     private let markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
@@ -80,7 +97,11 @@ import GhosttyKit
 
     deinit {
         let p = Unmanaged.passUnretained(self).toOpaque()
-        TerminalPane.liveLock.lock(); TerminalPane.live.remove(p); TerminalPane.liveLock.unlock()
+        let pid = paneID
+        TerminalPane.liveLock.lock()
+        TerminalPane.live.remove(p)
+        TerminalPane.silencedExits.remove(pid)   // pane gone → no more close_surface; bound the set
+        TerminalPane.liveLock.unlock()
         if let surface { ghostty_surface_free(surface) }
     }
 

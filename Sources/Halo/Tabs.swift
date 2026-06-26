@@ -244,7 +244,7 @@ final class Workspace {
         // Closing a session KILLS its daemon shell — the sidebar is the single source of
         // truth, so there are no orphaned detached sessions. (Window-close still only
         // detaches, since it doesn't drop the PaneTree from the shared store.)
-        closing.paneIDs.forEach { MuxClient.kill(paneID: $0) }
+        closing.paneIDs.forEach { TerminalPane.suppressExit($0); MuxClient.kill(paneID: $0) }
         luaFire("session-closed", closing.paneID)
         // If this was a worktree session, best-effort remove its worktree dir
         // off-main (non-force → dirty worktrees are left intact, never destroyed).
@@ -428,15 +428,17 @@ final class Workspace {
     // MARK: - Window-state persistence (this window's projects + sessions-by-cwd)
 
     /// Snapshot for windows.json: each project (id/name/path/color/expanded) with its
-    /// sessions reduced to their focused-pane cwd, plus the active project/session.
-    /// ponytail: v1 persists cwds only — NOT split layouts or live processes (a process
-    /// can't be restored); each session reopens as a single shell at its cwd.
+    /// sessions, plus the active project/session. Each session stores its full split
+    /// `layout` (topology + per-leaf paneID/cwd) so splits restore intact; cwd/paneID
+    /// stay top-level as a fallback for pre-layout snapshots. Live processes/scrollback
+    /// can't be restored — each leaf reopens as a fresh shell at its cwd.
     func serialize() -> [String: Any] {
         let projsData: [[String: Any]] = projs.map { p in
             var d: [String: Any] = [
                 "id": p.id, "name": p.name, "path": p.path, "expanded": p.expanded,
                 "sessions": p.sessions.map { (t: PaneTree) -> [String: Any] in
-                    var sd: [String: Any] = ["cwd": t.focusedCwd ?? p.path, "paneID": t.paneID]
+                    var sd: [String: Any] = ["cwd": t.focusedCwd ?? p.path, "paneID": t.paneID,
+                                             "layout": t.serializeLayout()]
                     if let nm = t.name { sd["name"] = nm }
                     return sd
                 },
@@ -463,6 +465,16 @@ final class Workspace {
             if fm.fileExists(atPath: fallback, isDirectory: &isDir), isDir.boolValue { return fallback }
             return NSHomeDirectory()
         }
+        // Replace each leaf's saved cwd with a usable one (recurse through splits).
+        func fixDirs(_ node: [String: Any], fallback: String) -> [String: Any] {
+            var n = node
+            if let a = node["a"] as? [String: Any], let b = node["b"] as? [String: Any] {
+                n["a"] = fixDirs(a, fallback: fallback); n["b"] = fixDirs(b, fallback: fallback)
+            } else if let cwd = node["cwd"] as? String {
+                n["cwd"] = usableDir(cwd, fallback: fallback)
+            }
+            return n
+        }
 
         for pd in projsData {
             let id = pd["id"] as? String ?? "u:\(UUID().uuidString)"
@@ -472,6 +484,15 @@ final class Workspace {
             let expanded = pd["expanded"] as? Bool ?? true
             var proj = Proj(id: id, name: name, path: path, sessions: [], expanded: expanded, color: color)
             for entry in (pd["sessions"] as? [Any] ?? []) {
+                // Preferred: a saved split layout (topology + per-leaf paneID/cwd).
+                if let d = entry as? [String: Any],
+                   let layout = d["layout"] as? [String: Any],
+                   layout["a"] != nil || layout["paneID"] != nil || layout["browser"] != nil {
+                    proj.sessions.append(makeTree(layout: fixDirs(layout, fallback: path),
+                                                  name: d["name"] as? String))
+                    continue
+                }
+                // Fallback: flat cwd/paneID (pre-layout snapshot) or legacy string entry.
                 let cwd: String, pid: String, nm: String?
                 if let d = entry as? [String: Any] {
                     cwd = d["cwd"] as? String ?? path
@@ -540,7 +561,15 @@ final class Workspace {
     }
 
     private func makeTree(cwd: String?, paneID: String = UUID().uuidString, name: String? = nil) -> PaneTree {
-        let tree = PaneTree(theme: theme, cwd: cwd, paneID: paneID, name: name)
+        wire(PaneTree(theme: theme, cwd: cwd, paneID: paneID, name: name))
+    }
+
+    /// Rebuild a session from a persisted split layout (windows.json topology).
+    private func makeTree(layout: [String: Any], name: String? = nil) -> PaneTree {
+        wire(PaneTree(theme: theme, layout: layout, name: name))
+    }
+
+    private func wire(_ tree: PaneTree) -> PaneTree {
         tree.onFocusChange = { [weak self] in self?.handleChange() }
         tree.onAttention = { [weak self, weak tree] in
             guard let self, let tree else { return }
