@@ -33,6 +33,14 @@ final class Session {
     private static let ringCap = 256 * 1024
     private(set) var ring = Data()
 
+    /// On-disk mirror of the ring (`sessions/<paneID>.log`) so scrollback survives a
+    /// daemon restart/reboot: a fresh Session seeds its replay ring from this file. Bounded
+    /// to logCap; trimmed back to the in-memory ring when it grows past that. 0600 — it
+    /// carries terminal output. Deleted when the session ends cleanly (see Daemon.deleteLog).
+    private var logFD: Int32 = -1
+    private var logBytes = 0
+    private static let logCap = 512 * 1024
+
     init?(paneID: String, cols rawCols: Int32, rows rawRows: Int32, cwd: String? = nil) {
         // Clamp to a sane minimum. A pane created before its window lays out reports a
         // 0×0 size; a 0-sized PTY is rejected by some shells. The real size arrives via
@@ -64,14 +72,52 @@ final class Session {
         }
         self.pid = child; self.masterFD = master
         _ = fcntl(masterFD, F_SETFL, fcntl(masterFD, F_GETFL, 0) | O_NONBLOCK)
+        seedRingAndOpenLog()
     }
 
-    /// Append raw PTY output to the ring, trimming the oldest bytes past the cap.
+    /// Seed the replay ring from the prior on-disk log (scrollback from before a daemon
+    /// restart), then open the log for append. The new shell's output continues the file.
+    private func seedRingAndOpenLog() {
+        let path = MuxPaths.sessionLog(paneID)
+        if let data = FileManager.default.contents(atPath: path), !data.isEmpty {
+            ring = data.count > Session.ringCap ? Data(data.suffix(Session.ringCap)) : data
+            logBytes = data.count
+        }
+        logFD = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+    }
+
+    /// Append raw PTY output to the ring (and the on-disk log), trimming past the cap.
     func ingest(_ bytes: Data) {
         ring.append(bytes)
         if ring.count > Session.ringCap {
             ring.removeFirst(ring.count - Session.ringCap)   // O(n) trim; runs only when full
         }
+        writeLog(bytes)
+    }
+
+    private func writeLog(_ bytes: Data) {
+        guard logFD >= 0 else { return }
+        bytes.withUnsafeBytes { raw in
+            if let base = raw.baseAddress { _ = write(logFD, base, raw.count) }
+        }
+        logBytes += bytes.count
+        if logBytes > Session.logCap { trimLog() }   // rewrite to the in-memory ring
+    }
+
+    /// Truncate the on-disk log back to the current ring (last ringCap bytes) so it stays
+    /// bounded. Amortized: runs only when the file passes logCap (≈ every 256 KB of output).
+    private func trimLog() {
+        let path = MuxPaths.sessionLog(paneID)
+        if logFD >= 0 { close(logFD); logFD = -1 }
+        try? ring.write(to: URL(fileURLWithPath: path))
+        chmod(path, 0o600)   // write(to:) may use default perms; re-assert owner-only
+        logFD = open(path, O_WRONLY | O_APPEND, 0o600)
+        logBytes = ring.count
+    }
+
+    /// Remove a session's on-disk scrollback (called when the session ends cleanly).
+    static func deleteLog(_ paneID: String) {
+        try? FileManager.default.removeItem(atPath: MuxPaths.sessionLog(paneID))
     }
 
     /// The replay sent on attach: the whole current ring.
@@ -103,5 +149,5 @@ final class Session {
 
     func markDead() { alive = false }
 
-    deinit { close(masterFD) }
+    deinit { close(masterFD); if logFD >= 0 { close(logFD) } }
 }

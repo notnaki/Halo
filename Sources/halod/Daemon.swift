@@ -114,6 +114,7 @@ final class Daemon {
             for c in s.clients where !sendFrame(c, frame) { stuck.append(c) }
             let subs = s.subscribers            // their session is gone → close them too
             sessions[id] = nil
+            Session.deleteLog(id)               // session ended cleanly → drop its on-disk scrollback
             for c in stuck { closeClient(c) }   // drop stuck clients after iterating + removing session
             for c in subs { closeClient(c) }
         }
