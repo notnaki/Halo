@@ -116,7 +116,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Mount a picker overlay in the key window (or free `refs` and bail if one is already up).
     private func presentPicker(_ make: (NSView, @escaping () -> Void) -> PickerOverlay?, freeing refs: [Int32]) {
-        guard let host = active?.controller.window?.contentView,
+        guard !onboardingActive,
+              let host = active?.controller.window?.contentView,
               !host.subviews.contains(where: { $0 is PickerOverlay || $0 is ConfirmOverlay }) else { refs.forEach { luaUnref($0) }; return }
         let dismiss: () -> Void = { [weak host] in host?.subviews.compactMap { $0 as? PickerOverlay }.forEach { $0.removeFromSuperview() } }
         guard let overlay = make(host, dismiss) else { return }
@@ -173,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// no longer targets (e.g. an active-scoped panel when focus moves). Also prunes overlays
     /// for closed windows. Called on panel set/update and whenever the active window changes.
     func renderPanels() {
+        if onboardingActive {   // suppress all plugin panels for the duration of onboarding
+            panelViews.values.flatMap { $0.values }.forEach { $0.removeFromSuperview() }
+            panelViews.removeAll()
+            return
+        }
         let live = Set(windows.map(ObjectIdentifier.init))
         for id in Array(panelViews.keys) {
             for (wid, ov) in panelViews[id] ?? [:] where !live.contains(wid) {
@@ -202,7 +208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// vesta.prompt: free-text input overlay; call the Lua ref with the typed text (or free
     /// the ref on cancel).
     func showPrompt(_ message: String, _ initial: String, _ ref: Int32) {
-        guard let host = active?.controller.window?.contentView,
+        guard !onboardingActive,
+              let host = active?.controller.window?.contentView,
               !host.subviews.contains(where: { $0 is PickerOverlay }) else { luaUnref(ref); return }
         let dismiss = { [weak host] in host?.subviews.compactMap { $0 as? PickerOverlay }.forEach { $0.removeFromSuperview() } }
         let overlay = PickerOverlay(theme: theme, prompt: message, initial: initial,
@@ -215,7 +222,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// vesta.confirm: compact yes/no dialog; call the Lua ref with a boolean (Esc/scrim → false).
     func showConfirm(_ message: String, _ ref: Int32) {
-        guard let host = active?.controller.window?.contentView,
+        guard !onboardingActive,
+              let host = active?.controller.window?.contentView,
               !host.subviews.contains(where: { $0 is PickerOverlay || $0 is ConfirmOverlay }) else { luaUnref(ref); return }
         let dismiss: () -> Void = { [weak host] in host?.subviews.compactMap { $0 as? ConfirmOverlay }.forEach { $0.removeFromSuperview() } }
         let overlay = ConfirmOverlay(theme: theme, message: message) { yes in
@@ -231,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// bundle). Falls back to stderr when there's no window. Uses the theme accent — no
     /// hardcoded colors.
     func showToast(_ msg: String) {
+        if onboardingActive { return }   // no plugin toasts over onboarding
         guard let host = active?.controller.window?.contentView else {
             FileHandle.standardError.write(Data("[vesta.lua] \(msg)\n".utf8)); return
         }
@@ -367,7 +376,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         luaShowPick = { [weak self] items, ref, opts in self?.showPick(items, ref, opts) }
         luaShowPickMulti = { [weak self] items, ref, opts in self?.showPickMulti(items, ref, opts) }
         luaShowMenu = { [weak self] items, refs, opts in self?.showMenu(items, refs, opts) }
-        luaSetStatus = { [weak self] s in self?.windows.forEach { $0.controller.setLuaStatus(s) } }
+        luaSetStatus = { [weak self] s in
+            guard let self, !self.onboardingActive else { return }   // no plugin status during onboarding
+            self.windows.forEach { $0.controller.setLuaStatus(s) } }
         luaPanel = { [weak self] lines, opts in self?.luaPanelSet(lines, opts) ?? 0 }
         luaClosePanel = { [weak self] id in
             guard let self else { return }
@@ -423,6 +434,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Updater.check(silent: true)   // notify if a newer GitHub release exists
+
+        maybeShowOnboarding()
+    }
+
+    var onboardingActive = false
+
+    /// First-ever launch only: mount the onboarding overlay on the key window. Plugin UI
+    /// (panels/status/toasts/pickers) is suppressed while it's up, then rebuilt on finish.
+    /// Gated on a plain bool (not a version), so app updates never re-trigger it.
+    private func maybeShowOnboarding() {
+        guard !UserDefaults.standard.bool(forKey: "VestaDidOnboard"),
+              let host = active?.controller.window?.contentView,
+              !host.subviews.contains(where: { $0 is OnboardingOverlay }) else { return }
+        onboardingActive = true
+        renderPanels()                                  // tears down any plugin panels already up
+        windows.forEach { $0.controller.setLuaStatus(""); $0.controller.setChromeHidden(true) }
+        let overlay = OnboardingOverlay(theme: theme,
+            addProject: { [weak self] path in self?.active?.workspace.newProject(at: path) },
+            onFinish: { [weak self] in
+                guard let self else { return }
+                self.onboardingActive = false
+                self.windows.forEach { $0.controller.setChromeHidden(false) }
+                self.reloadConfig() })
+        overlay.frame = host.bounds
+        overlay.autoresizingMask = [.width, .height]
+        host.addSubview(overlay)
     }
 
     @objc func checkForUpdates() { Updater.check(silent: false) }
@@ -673,7 +710,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Everything else acts on the key window.
             guard let ctx = self.active else { return e }
             let ws = ctx.workspace
-            switch e.charactersIgnoringModifiers {
+            // Lowercase: charactersIgnoringModifiers keeps Shift applied, so ⌘⇧D yields "D"
+            // (not "d") — without this, every ⌘⇧<letter> chord silently falls through.
+            switch e.charactersIgnoringModifiers?.lowercased() {
             // Split panes (unchanged)
             case "d":  ws.activeTree.splitFocused(shift ? .horizontal : .vertical, cwd: ws.activeTree.focusedCwd); return nil
             // ⌘W: pane → session → window (cascade). ⌘⇧W: close session.

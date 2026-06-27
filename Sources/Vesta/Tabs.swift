@@ -39,6 +39,9 @@ struct Proj {
 final class SessionStore {
     var projs: [Proj] = []
     var broadcast: () -> Void = {}
+    // Last active (project, session) selection — survives closing all windows, so reopening
+    // returns to where you were instead of spawning a fresh project.
+    var lastActive: (p: Int, s: Int) = (0, 0)
 }
 
 /// Owns projects; each project owns sessions (PaneTrees).
@@ -87,14 +90,27 @@ final class Workspace {
             body.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
-        // Launch: home project at ~ with one session at ~, expanded + active.
-        // Config projects are appended collapsed + empty by loadProjects/appendProject.
-        let home = NSHomeDirectory()
-        var homeProj = makeProj(name: "home", path: home, expanded: true, id: "home")
-        homeProj.sessions.append(makeTree(cwd: home))
-        projs.append(homeProj)
-        activeP = 0
-        activeS = 0
+        if projs.isEmpty {
+            // First window for an empty pool: seed the home project at ~ with one session.
+            // Config projects are appended collapsed + empty by loadProjects/appendProject.
+            let home = NSHomeDirectory()
+            var homeProj = makeProj(name: "home", path: home, expanded: true, id: "home")
+            homeProj.sessions.append(makeTree(cwd: home))
+            projs.append(homeProj)
+            activeP = 0
+            activeS = 0
+        } else {
+            // Reusing a live pool (e.g. reopened after closing all windows): return to the
+            // last active project — clamped — never spawn a duplicate. Lazy-open a session if
+            // that project was collapsed/empty.
+            let p = min(max(store.lastActive.p, 0), projs.count - 1)
+            activeP = p
+            if projs[p].sessions.isEmpty {
+                projs[p].sessions.append(makeTree(cwd: projs[p].path.isEmpty ? NSHomeDirectory() : projs[p].path))
+                projs[p].expanded = true
+            }
+            activeS = min(max(store.lastActive.s, 0), projs[p].sessions.count - 1)
+        }
         showActive()
     }
 
@@ -582,6 +598,7 @@ final class Workspace {
     }
 
     private func showActive() {
+        store.lastActive = (activeP, activeS)   // remember for reopen-after-close
         mountLive()
         attention.remove(ObjectIdentifier(activeTree))   // clear ring for the focused session
         handleChange()                                   // broadcast → other windows reconcile

@@ -47,6 +47,7 @@ final class VestaWindowController: NSWindowController {
 
     private var footer: NSTextField!
     private var dirLabel: NSTextField!
+    private weak var titlebarAccessory: NSView?   // host of toggle/folder/path/pill — hidden during onboarding
 
     // Prefix-mode "armed" indicator (shown in the titlebar while waiting for the
     // next key). Color comes from theme.accent — never hardcoded.
@@ -886,8 +887,13 @@ final class VestaWindowController: NSWindowController {
         dirVsPill.isActive = true
 
         acc.view = host
+        titlebarAccessory = host
         window?.addTitlebarAccessoryViewController(acc)
     }
+
+    /// Onboarding "clean slate": hide every titlebar accessory (sidebar toggle, folder,
+    /// path, prefix pill) so only the traffic lights remain. Restored when onboarding ends.
+    func setChromeHidden(_ hidden: Bool) { titlebarAccessory?.isHidden = hidden }
 
     /// "name / path" → name bold (full), "/" faint, path dim. 11.5px.
     private func dirAttributed(_ raw: String) -> NSAttributedString {
