@@ -24,25 +24,22 @@ BUNDLE=$(ls -d "$BINDIR"/Vesta_vesta.bundle 2>/dev/null | head -1)
 [ -x "$BIN" ] || { echo "no binary at $BIN"; exit 1; }
 [ -d "$BUNDLE" ] || { echo "no resource bundle next to binary"; exit 1; }
 
-echo ">> compiling app icon..."
+echo ">> building app icon..."
 ICONOUT=$(mktemp -d)
-# Prefer the Icon Composer document (AppIcon.icon) — actool renders its
-# liquid-glass treatment to AppIcon.icns + Assets.car. Fall back to the SVG.
-if [ -d AppIcon.icon ] && xcrun actool AppIcon.icon --compile "$ICONOUT" --app-icon AppIcon \
-     --platform macosx --minimum-deployment-target 26.0 \
-     --output-partial-info-plist "$ICONOUT/icon.plist" >/dev/null 2>&1 && [ -f "$ICONOUT/AppIcon.icns" ]; then
-  echo ">> rendered AppIcon.icon (Icon Composer)"
-else
-  echo "  WARN: actool failed; rendering icon from assets/vesta-logo.svg"
-  ICONSET=$(mktemp -d)/Vesta.iconset; mkdir -p "$ICONSET"
-  qlmanage -t -s 1024 -o /tmp assets/vesta-logo.svg >/dev/null 2>&1
-  SRC=/tmp/vesta-logo.svg.png
-  for s in 16 32 128 256 512; do
-    sips -z $s $s          "$SRC" --out "$ICONSET/icon_${s}x${s}.png"      >/dev/null
-    sips -z $((s*2)) $((s*2)) "$SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ICONSET" -o "$ICONOUT/AppIcon.icns"
-fi
+# Build the .icns from a full-bleed, TRANSPARENT-corner PNG (assets/AppIcon-1024.png,
+# rendered from the SVG with alpha preserved). We deliberately avoid:
+#   • actool/Icon Composer — bakes the macOS-26 liquid-glass treatment + an inset, and is
+#     flaky on CI runners; and
+#   • qlmanage — flattens the SVG's transparent margins to WHITE (the white-border bug).
+# sips/iconutil preserve the PNG's alpha, so the corners stay transparent like a normal icon.
+ICONSRC="assets/AppIcon-1024.png"
+[ -f "$ICONSRC" ] || { echo "no icon at $ICONSRC"; exit 1; }
+ICONSET=$(mktemp -d)/Vesta.iconset; mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+  sips -z $s $s             "$ICONSRC" --out "$ICONSET/icon_${s}x${s}.png"     >/dev/null
+  sips -z $((s*2)) $((s*2)) "$ICONSRC" --out "$ICONSET/icon_${s}x${s}@2x.png"  >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$ICONOUT/AppIcon.icns"
 
 echo ">> assembling ${APP}..."
 rm -rf "${APP}"
