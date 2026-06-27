@@ -155,10 +155,12 @@ final class OnboardingOverlay: NSView {
     // MARK: - Navigation
 
     private func goNext() {
+        guard !inIntro else { return }   // card buttons are invisible during the intro; ignore stray hits
         if let next = Page(rawValue: page.rawValue + 1) { page = next; render() }
         else { finish() }   // past the last page → done
     }
     private func goBack() {
+        guard !inIntro else { return }
         if let prev = Page(rawValue: page.rawValue - 1) { page = prev; render() }
     }
     @objc private func skipAll() { finish() }
@@ -247,7 +249,13 @@ final class OnboardingOverlay: NSView {
         statusLabel.stringValue = "installing…"
         // /usr/local/bin needs admin → AppleScript prompts for the password. Blocks, so
         // run it off-main. Main binary may be "Vesta" (bundle) or "vesta" (dev) — land it as "vesta".
-        let script = "do shell script \"mkdir -p /usr/local/bin && cp -f '\(exe)' /usr/local/bin/vesta && cp -f '\(dir)/vestad' /usr/local/bin/vestad && cp -f '\(dir)/vesta-attach' /usr/local/bin/vesta-attach\" with administrator privileges"
+        // Single-quote each path and escape any embedded quote so odd install paths don't break.
+        func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let cmd = "mkdir -p /usr/local/bin"
+            + " && cp -f \(q(exe)) /usr/local/bin/vesta"
+            + " && cp -f \(q(dir + "/vestad")) /usr/local/bin/vestad"
+            + " && cp -f \(q(dir + "/vesta-attach")) /usr/local/bin/vesta-attach"
+        let script = "do shell script \"\(cmd)\" with administrator privileges"
         DispatchQueue.global().async {
             var err: NSDictionary?
             let ok = NSAppleScript(source: script)?.executeAndReturnError(&err) != nil
