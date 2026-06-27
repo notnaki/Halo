@@ -18,6 +18,12 @@ if argv.first == "selfcheck" {
     muxProtocolSelfCheck()
     muxPathsSelfCheck()
     luaSandboxSelfCheck()
+    // Resource smoke test (works in release — asserts compile out): the bundled fonts must be
+    // locatable from THIS binary's bundle. Catches a mispackaged .app before notarize/publish.
+    if Fonts.fontsDirectory() == nil {
+        FileHandle.standardError.write(Data("selfcheck FAIL: bundled fonts not found\n".utf8))
+        exit(1)
+    }
     // chromeSelfCheck creates AppKit objects (VestaWindowController → VestaConfig.shared →
     // GhosttyApp.shared). GhosttyApp.shared calls NSApp.isActive; NSApp is nil until
     // NSApplication.shared is first touched. Touch it here so GhosttyApp.shared doesn't crash.

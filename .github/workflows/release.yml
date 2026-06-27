@@ -69,6 +69,11 @@ jobs:
         # dispatch GITHUB_REF_NAME is a branch, which make-app.sh ignores (falls back).
         run: SIGN_ID="$SIGN_ID" VESTA_VERSION="${GITHUB_REF_NAME#v}" ./make-app.sh release
 
+      - name: Smoke-test the release bundle
+        # Run the packaged (non-debug) binary's selfcheck so a mispackaged bundle — e.g.
+        # resources the app can't find at runtime — fails the release BEFORE notarize/publish.
+        run: ./Vesta.app/Contents/MacOS/Vesta selfcheck
+
       - name: Notarize + staple
         env:
           KEY_ID:    ${{ secrets.AC_API_KEY_ID }}

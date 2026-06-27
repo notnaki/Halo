@@ -5,7 +5,7 @@ import CoreText
 /// Geist Mono for everything else. Bundled + registered at launch.
 enum Fonts {
     static func register() {
-        guard let dir = Bundle.module.url(forResource: "Fonts", withExtension: nil),
+        guard let dir = fontsDirectory(),
               let urls = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return }
         // .ttf (Geist/Martian) + .otf (Redaction grades). Registered process-wide,
@@ -13,6 +13,22 @@ enum Fonts {
         for u in urls where ["ttf", "otf"].contains(u.pathExtension.lowercased()) {
             CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil)
         }
+    }
+
+    /// Locate the bundled Fonts directory WITHOUT `Bundle.module` — its generated accessor
+    /// only checks `Bundle.main.bundleURL/Vesta_vesta.bundle` (the app ROOT) and a compile-time
+    /// build path, so it `fatalError`s in a distributed .app (resources live in Contents/
+    /// Resources) on any machine but the build host. Search the real locations instead.
+    static func fontsDirectory() -> URL? {
+        let fm = FileManager.default
+        var candidates: [URL] = []
+        if let res = Bundle.main.resourceURL {                       // .app: Contents/Resources
+            candidates.append(res.appendingPathComponent("Vesta_vesta.bundle/Fonts"))
+            candidates.append(res.appendingPathComponent("Fonts"))
+        }
+        // `swift run` (no .app): the SPM resource bundle sits next to the executable.
+        candidates.append(Bundle.main.bundleURL.appendingPathComponent("Vesta_vesta.bundle/Fonts"))
+        return candidates.first { fm.fileExists(atPath: $0.path) }
     }
 
     /// Martian Mono — condensed, technical. For uppercase instrument labels.

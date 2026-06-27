@@ -117,13 +117,20 @@ func luaSandboxSelfCheck() {
     defer { lua_close(L) }
     luaL_openlibs(L)
     lua_sethook(L, luaCountHook, kLuaMaskCount, 200_000)
-    assert("while true do end".withCString { luaL_loadstring(L, $0) } == 0, "loop compiles")
-    assert(luaArmedPcall(L, nargs: 0, nresults: 0) != 0, "runaway loop must be aborted by the guard")
+    // NOTE: keep the Lua calls OUT of assert(...) — Swift doesn't evaluate assert arguments in
+    // release builds, so embedding them there leaves the stack empty and the later
+    // lua_settop/lua_tolstring operate on garbage (a release-only crash).
+    let loopLoaded = "while true do end".withCString { luaL_loadstring(L, $0) }
+    assert(loopLoaded == 0, "loop compiles")
+    let loopAborted = luaArmedPcall(L, nargs: 0, nresults: 0)
+    assert(loopAborted != 0, "runaway loop must be aborted by the guard")
     let msg = lua_tolstring(L, -1, nil).map { String(cString: $0) } ?? ""
     assert(msg.contains("budget"), "guard error mentions budget, got: \(msg)")
     lua_settop(L, -2)
-    assert("return 1".withCString { luaL_loadstring(L, $0) } == 0, "normal chunk compiles")
-    assert(luaArmedPcall(L, nargs: 0, nresults: 1) == 0, "a normal call must NOT be aborted")
+    let normalLoaded = "return 1".withCString { luaL_loadstring(L, $0) }
+    assert(normalLoaded == 0, "normal chunk compiles")
+    let normalOK = luaArmedPcall(L, nargs: 0, nresults: 1)
+    assert(normalOK == 0, "a normal call must NOT be aborted")
     print("luaSandboxSelfCheck OK")
 }
 
