@@ -29,17 +29,24 @@ BUNDLE=$(ls -d "$BINDIR"/Vesta_vesta.bundle 2>/dev/null | head -1)
 
 echo ">> compiling app icon..."
 ICONOUT=$(mktemp -d)
-# Use the Icon Composer document (AppIcon.icon) directly: actool renders the macOS-26
-# liquid-glass treatment to AppIcon.icns + Assets.car. Shipping Assets.car (with
-# CFBundleIconName) lets Tahoe shape the icon ONCE — a pre-rounded .icns would get a
-# second system squircle + shadow (a "box shadow" plate). Fall back to the SVG only if
-# actool is unavailable.
-if [ -d AppIcon.icon ] && xcrun actool AppIcon.icon --compile "$ICONOUT" --app-icon AppIcon \
+# Prefer the PRE-RENDERED Icon Composer output committed at AppIcon-prebuilt/ (AppIcon.icns
+# + Assets.car). actool only renders the .icon on macOS 26 / Xcode 26, which the CI runner
+# (macos-15) lacks — there it silently fell back to a pre-rounded PNG, and Tahoe then added
+# its OWN squircle + shadow (the "box" plate). Shipping the committed Assets.car means CI
+# gets the exact Composer icon the system shapes once. To refresh after editing AppIcon.icon:
+#   xcrun actool AppIcon.icon --compile out --app-icon AppIcon --platform macosx \
+#     --minimum-deployment-target 26.0 --output-partial-info-plist out/icon.plist
+#   cp out/AppIcon.icns out/Assets.car AppIcon-prebuilt/
+if [ -f AppIcon-prebuilt/Assets.car ] && [ -f AppIcon-prebuilt/AppIcon.icns ]; then
+  cp AppIcon-prebuilt/AppIcon.icns "$ICONOUT/AppIcon.icns"
+  cp AppIcon-prebuilt/Assets.car   "$ICONOUT/Assets.car"
+  echo ">> using pre-rendered Icon Composer assets (AppIcon-prebuilt/)"
+elif [ -d AppIcon.icon ] && xcrun actool AppIcon.icon --compile "$ICONOUT" --app-icon AppIcon \
      --platform macosx --minimum-deployment-target 26.0 \
      --output-partial-info-plist "$ICONOUT/icon.plist" >/dev/null 2>&1 && [ -f "$ICONOUT/AppIcon.icns" ]; then
   echo ">> rendered AppIcon.icon (Icon Composer)"
 else
-  echo "  WARN: actool failed; rendering icon from assets/AppIcon-1024.png"
+  echo "  WARN: no prebuilt assets and actool failed; rendering .icns from assets/AppIcon-1024.png"
   ICONSET=$(mktemp -d)/Vesta.iconset; mkdir -p "$ICONSET"
   for s in 16 32 128 256 512; do
     sips -z $s $s             assets/AppIcon-1024.png --out "$ICONSET/icon_${s}x${s}.png"     >/dev/null
