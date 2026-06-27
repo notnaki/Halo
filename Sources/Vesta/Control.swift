@@ -131,8 +131,15 @@ final class ControlServer: @unchecked Sendable {
         case "state", "sessions":
             return stateProvider?() ?? ["ok": false, "error": "no state"]
         case "notify":
-            guard !args.isEmpty else { return ["ok": false, "error": "notify: <message> required"] }
-            luaNotify(args.joined(separator: " "))   // same toast as vesta.notify in Lua
+            // notify [--desktop] [--title <t>] <message…>. --desktop forces a banner even when
+            // focused; default posts a banner only when backgrounded. Always shows in-app.
+            var rest = args, desktop = false, title: String? = nil
+            if let i = rest.firstIndex(of: "--desktop") { desktop = true; rest.remove(at: i) }
+            if let i = rest.firstIndex(of: "--title"), i + 1 < rest.count {
+                title = rest[i + 1]; rest.removeSubrange(i...(i + 1))
+            }
+            guard !rest.isEmpty else { return ["ok": false, "error": "notify: <message> required"] }
+            luaNotifyRich(rest.joined(separator: " "), title, desktop)
             return ["ok": true]
         case "run":
             guard let name = args.first else { return ["ok": false, "error": "run: <command> required"] }
