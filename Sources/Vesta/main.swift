@@ -704,9 +704,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.windows.forEach { self?.applyUpdatePhase(to: $0.controller, phase) }
         }
         Updater.shared.check(silent: true)  // surface a newer release in the sidebar badge
-        // Re-check periodically so the badge appears during a long-running session, not only
-        // at launch. Silent — just updates the badge; skipped while downloading/staged.
-        updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
+        // Re-check hourly so the badge appears during a long-running session, not only at
+        // launch. Silent — just updates the badge; skipped while downloading/staged.
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             MainActor.assumeIsolated { Updater.shared.check(silent: true) }
         }
 
