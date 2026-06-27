@@ -775,7 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "Vesta",
-            .applicationVersion: "0.1.0",
+            .applicationVersion: Updater.currentVersion,   // from the bundle, not hardcoded
             .credits: NSAttributedString(
                 string:
                     "A native macOS terminal for running AI coding agents in parallel, built on libghostty.",

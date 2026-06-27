@@ -784,7 +784,7 @@ final class VestaWindowController: NSWindowController {
         footer.lineBreakMode = .byTruncatingTail
         footer.cell?.usesSingleLineMode = true
 
-        let version = NSTextField(labelWithString: "vesta 0.1.0")
+        let version = NSTextField(labelWithString: "vesta \(Updater.currentVersion)")
         version.translatesAutoresizingMaskIntoConstraints = false
         version.font = Fonts.inst(9.5)
         version.textColor = txt(.faint)
