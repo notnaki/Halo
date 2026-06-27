@@ -211,6 +211,8 @@ final class VestaWindowController: NSWindowController {
         prefixPill?.textColor = t.accent
         prefixPill?.layer?.borderColor = t.accent.cgColor
         prefixPill?.layer?.backgroundColor = t.accent.withAlphaComponent(0.12).cgColor
+        bellButton?.contentTintColor = txt(.faint)            // re-theme the bell + unread dot
+        bellDot?.layer?.backgroundColor = t.accent.cgColor
     }
 
     // Footer = git/normal status, plus an optional plugin status (vesta.status) appended

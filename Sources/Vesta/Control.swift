@@ -135,8 +135,9 @@ final class ControlServer: @unchecked Sendable {
             // focused; default posts a banner only when backgrounded. Always shows in-app.
             var rest = args, desktop = false, title: String? = nil
             if let i = rest.firstIndex(of: "--desktop") { desktop = true; rest.remove(at: i) }
-            if let i = rest.firstIndex(of: "--title"), i + 1 < rest.count {
-                title = rest[i + 1]; rest.removeSubrange(i...(i + 1))
+            if let i = rest.firstIndex(of: "--title") {
+                if i + 1 < rest.count { title = rest[i + 1]; rest.removeSubrange(i...(i + 1)) }
+                else { rest.remove(at: i) }   // bare trailing --title: drop it, don't leak into the message
             }
             guard !rest.isEmpty else { return ["ok": false, "error": "notify: <message> required"] }
             luaNotifyRich(rest.joined(separator: " "), title, desktop)
