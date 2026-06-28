@@ -70,6 +70,8 @@ cp "$ICONOUT/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
 # Assets.car carries the Tahoe liquid-glass icon (read via CFBundleIconName). Shipping it
 # lets the system render + shape the icon natively (one squircle, no double-plate).
 [ -f "$ICONOUT/Assets.car" ] && cp "$ICONOUT/Assets.car" "${APP}/Contents/Resources/Assets.car"
+# Icon flame variants (Icon Composer exports) for the About-panel click-to-cycle easter egg.
+[ -d AppIcon-prebuilt/variants ] && cp -R AppIcon-prebuilt/variants "${APP}/Contents/Resources/icon-variants"
 # Legal: ship the license + third-party attribution inside the bundle.
 cp LICENSE "${APP}/Contents/Resources/LICENSE" 2>/dev/null || true
 cp NOTICE  "${APP}/Contents/Resources/NOTICE"  2>/dev/null || true

@@ -11,6 +11,9 @@ final class SettingsWindowController: NSWindowController {
     private let onReload: () -> Void
     private let onReset: () -> Void
     private var configView: NSTextView?   // full-config editor (any ghostty key)
+    private var accent: NSColor = .controlAccentColor   // selection rings in the icon grid
+    private var iconCells: [IconCell] = []
+    private var pluginBoxes: [NSButton] = []   // for the plugin filter field
 
     init(theme: Theme,
          onSidebarWidth: @escaping (CGFloat) -> Void,
@@ -23,10 +26,10 @@ final class SettingsWindowController: NSWindowController {
         self.onOpenConfig = onOpenConfig
         self.onReload = onReload
         self.onReset = onReset
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 600),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 660),
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.title = "Vesta Settings"
-        win.minSize = NSSize(width: 420, height: 460)
+        win.minSize = NSSize(width: 460, height: 520)
         super.init(window: win)
         build(theme: theme)
         win.center()
@@ -35,21 +38,44 @@ final class SettingsWindowController: NSWindowController {
 
     private func build(theme: Theme) {
         let cfg = VestaConfig.shared
+        accent = cfg.accent ?? theme.accent
+
+        // Dark, app-consistent chrome (the rest of Vesta is near-black).
+        window?.appearance = NSAppearance(named: .darkAqua)
+        window?.backgroundColor = NSColor(white: 0.12, alpha: 1)
+
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let accent = NSColorWell(); accent.color = cfg.accent ?? theme.accent
-        accent.target = self; accent.action = #selector(accentChanged(_:))
-        stack.addArrangedSubview(row("Accent", accent, key: "vesta-accent"))
+        // Each section: an uppercase header + a rounded card holding its rows.
+        func addSection(_ title: String, _ rows: [NSView]) {
+            let h = sectionHeader(title)
+            stack.addArrangedSubview(h)
+            let c = card(rows)
+            stack.addArrangedSubview(c)
+            c.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            stack.setCustomSpacing(7, after: h)
+            stack.setCustomSpacing(22, after: c)
+        }
 
+        // ── App Icon ──────────────────────────────────────────────────────────────
+        if !AboutWindowController.loadVariants().isEmpty {
+            let caption = NSTextField(wrappingLabelWithString:
+                "Click a flame to set the app icon. It’s written onto Vesta.app, so it sticks in Finder and the Dock — and survives quitting and updates.")
+            caption.font = .systemFont(ofSize: 11)
+            caption.textColor = NSColor(white: 0.5, alpha: 1)
+            caption.preferredMaxLayoutWidth = 392
+            addSection("App Icon", [iconGrid(), caption])
+        }
+
+        // ── Appearance ──────────────────────────────────────────────────────────────
+        let accentWell = NSColorWell(); accentWell.color = cfg.accent ?? theme.accent
+        accentWell.target = self; accentWell.action = #selector(accentChanged(_:))
         let surface = NSColorWell(); surface.color = cfg.surface ?? theme.background
         surface.target = self; surface.action = #selector(surfaceChanged(_:))
-        stack.addArrangedSubview(row("Surface", surface, key: "vesta-surface"))
-
         // Terminal background = ghostty's own `background` key (what libghostty paints
         // behind text). Distinct from Surface (Vesta's chrome). Applies on Reload.
         let termBG = NSColorWell()
@@ -57,54 +83,92 @@ final class SettingsWindowController: NSWindowController {
             .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) }
             .flatMap(PanelOverlay.hexColor) ?? theme.background
         termBG.target = self; termBG.action = #selector(termBGChanged(_:))
-        stack.addArrangedSubview(row("Terminal bg", termBG, key: "background"))
+        addSection("Appearance", [
+            row("Accent", accentWell, key: "vesta-accent"),
+            row("Surface", surface, key: "vesta-surface"),
+            row("Terminal bg", termBG, key: "background"),
+        ])
 
-        stack.addArrangedSubview(row("Font", fontPopup(), key: "vesta-font-family"))
+        // ── Typography ────────────────────────────────────────────────────────────
+        addSection("Typography", [
+            row("Font", fontPopup(), key: "vesta-font-family"),
+            row("Font size", slider(Double(cfg.fontScale * 13), 9, 22, #selector(fontChanged(_:))), key: "vesta-font-size"),
+        ])
 
-        stack.addArrangedSubview(row("Sidebar width",
-            slider(Double(cfg.sidebarWidth), 160, 420, #selector(sidebarChanged(_:))), key: "vesta-sidebar-width"))
-        stack.addArrangedSubview(row("Font size",
-            slider(Double(cfg.fontScale * 13), 9, 22, #selector(fontChanged(_:))), key: "vesta-font-size"))
-        stack.addArrangedSubview(row("Divider width",
-            slider(Double(cfg.dividerWidth), 1, 14, #selector(dividerChanged(_:))), key: "vesta-divider-width"))
+        // ── Layout ──────────────────────────────────────────────────────────────────
+        addSection("Layout", [
+            row("Sidebar width", slider(Double(cfg.sidebarWidth), 160, 420, #selector(sidebarChanged(_:))), key: "vesta-sidebar-width"),
+            row("Divider width", slider(Double(cfg.dividerWidth), 1, 14, #selector(dividerChanged(_:))), key: "vesta-divider-width"),
+        ])
 
-        let note = NSTextField(labelWithString: "Sidebar width applies live; click Reload to apply colors, fonts, theme, and any edited config.")
-        note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor
-        note.lineBreakMode = .byWordWrapping; note.preferredMaxLayoutWidth = 340
-        stack.addArrangedSubview(note)
+        // ── Plugins — enable/disable installed Lua plugins (reloads on toggle) ──────
+        let installed = LuaRuntime.shared.installedPlugins()
+        if !installed.isEmpty {
+            let disabled = LuaRuntime.shared.disabledPlugins()
+            pluginBoxes = installed.map { name in
+                // Ellipsize over-long names for display; keep the full name in `identifier`
+                // (NSButton resists shrinking, so layout-based truncation is unreliable —
+                // we truncate the string instead). toggle + filter read the identifier.
+                let shown = name.count > 40 ? String(name.prefix(39)) + "…" : name
+                let cb = NSButton(checkboxWithTitle: shown, target: self, action: #selector(pluginToggled(_:)))
+                cb.identifier = NSUserInterfaceItemIdentifier(name)
+                cb.toolTip = name
+                cb.state = disabled.contains(name) ? .off : .on
+                return cb
+            }
+            let list = NSStackView(views: pluginBoxes)
+            list.orientation = .vertical; list.alignment = .leading; list.spacing = 7
+            list.translatesAutoresizingMaskIntoConstraints = false
+            let listScroll = NSScrollView()
+            listScroll.hasVerticalScroller = true; listScroll.autohidesScrollers = true
+            listScroll.drawsBackground = false
+            listScroll.translatesAutoresizingMaskIntoConstraints = false
+            let listDoc = FlippedView(); listDoc.translatesAutoresizingMaskIntoConstraints = false
+            listDoc.addSubview(list)
+            listScroll.documentView = listDoc
+            NSLayoutConstraint.activate([
+                list.leadingAnchor.constraint(equalTo: listDoc.leadingAnchor),
+                list.trailingAnchor.constraint(equalTo: listDoc.trailingAnchor),
+                list.topAnchor.constraint(equalTo: listDoc.topAnchor, constant: 2),
+                list.bottomAnchor.constraint(equalTo: listDoc.bottomAnchor, constant: -2),
+                listDoc.widthAnchor.constraint(equalTo: listScroll.contentView.widthAnchor),
+            ])
+            // Cap the visible height so hundreds of plugins scroll instead of stretching
+            // the page; small lists size to their content.
+            let h = min(CGFloat(installed.count) * 21 + 6, 168)
+            listScroll.heightAnchor.constraint(equalToConstant: h).isActive = true
+
+            var rows: [NSView] = []
+            var search: NSSearchField?
+            if installed.count > 8 {   // a filter only earns its place once the list is long
+                let s = NSSearchField()
+                s.placeholderString = "Filter \(installed.count) plugins"
+                s.target = self; s.action = #selector(filterPlugins(_:))
+                search = s; rows.append(s)
+            }
+            rows.append(listScroll)
+            addSection("Plugins", rows)
+            search?.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+            listScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+        }
+
+        // ── Configuration — full editor; accepts ANY ghostty key ────────────────────
+        let note = NSTextField(wrappingLabelWithString:
+            "Sidebar width applies live. Reload applies colors, fonts, theme, and edited config. The editor takes any ghostty option (ghostty.org/docs/config).")
+        note.font = .systemFont(ofSize: 11); note.textColor = NSColor(white: 0.5, alpha: 1)
+        note.preferredMaxLayoutWidth = 392
 
         let btns = NSStackView(views: [
             button("Import ghostty config", #selector(importTapped)),
             button("Open config file", #selector(openTapped)),
-            button("Reset config", #selector(resetTapped)),
-            button("Reload", #selector(reloadTapped)),
+            button("Reset", #selector(resetTapped)),
         ])
         btns.orientation = .horizontal; btns.spacing = 8
-        stack.addArrangedSubview(btns)
-
-        // Plugins — enable/disable installed Lua plugins (reloads on toggle).
-        let installed = LuaRuntime.shared.installedPlugins()
-        if !installed.isEmpty {
-            let ph = NSTextField(labelWithString: "Plugins")
-            ph.font = .boldSystemFont(ofSize: 12)
-            stack.addArrangedSubview(ph)
-            let disabled = LuaRuntime.shared.disabledPlugins()
-            for name in installed {
-                let cb = NSButton(checkboxWithTitle: name, target: self, action: #selector(pluginToggled(_:)))
-                cb.state = disabled.contains(name) ? .off : .on
-                stack.addArrangedSubview(cb)
-            }
-        }
-
-        // ── Full config editor — accepts ANY ghostty key (libghostty parses the
-        // whole file), so this is the complete config surface, not just vesta-*.
-        let header = NSTextField(labelWithString: "Config — any ghostty option (see ghostty.org/docs/config)")
-        header.font = .boldSystemFont(ofSize: 12)
-        stack.addArrangedSubview(header)
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+        scroll.borderType = .lineBorder
+        scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
         let tv = NSTextView()
         tv.isRichText = false
@@ -114,19 +178,99 @@ final class SettingsWindowController: NSWindowController {
         tv.string = currentConfigText()
         scroll.documentView = tv
         self.configView = tv
-        stack.addArrangedSubview(scroll)
-        stack.addArrangedSubview(button("Save config", #selector(saveConfigTapped)))
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
 
+        let saveRow = NSStackView(views: [button("Reload", #selector(reloadTapped)), button("Save config", #selector(saveConfigTapped))])
+        saveRow.orientation = .horizontal; saveRow.spacing = 8
+
+        addSection("Configuration", [note, btns, scroll, saveRow])
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true   // fill the card
+
+        // Everything lives in a vertical scroll view so the window never outgrows the
+        // screen — the content is tall, so we scroll it inside a fixed-height window.
         let content = window!.contentView!
-        content.addSubview(stack)
+        let page = NSScrollView()
+        page.hasVerticalScroller = true
+        page.autohidesScrollers = true
+        page.drawsBackground = false
+        page.translatesAutoresizingMaskIntoConstraints = false
+        let doc = FlippedView()
+        doc.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(stack)
+        page.documentView = doc
+        content.addSubview(page)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            page.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            page.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            page.topAnchor.constraint(equalTo: content.topAnchor),
+            page.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            doc.widthAnchor.constraint(equalTo: page.contentView.widthAnchor),   // no horizontal scroll
+            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 22),
+            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -22),
+            stack.topAnchor.constraint(equalTo: doc.topAnchor, constant: 22),
+            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -22),
         ])
+        // Open at a height that fits on-screen (scroll handles the overflow).
+        if let vis = NSScreen.main?.visibleFrame {
+            window?.setContentSize(NSSize(width: 480, height: min(720, vis.height - 80)))
+            window?.center()
+        }
+    }
+
+    // MARK: - icon picker + section chrome
+
+    private func iconGrid() -> NSView {
+        let variants = AboutWindowController.loadVariants()
+        let saved = UserDefaults.standard.string(forKey: AboutWindowController.iconKey) ?? variants.first?.name
+        iconCells = variants.map { v in
+            IconCell(name: v.name, image: v.image, selected: v.name == saved, accent: accent) { [weak self] n in self?.pickIcon(n) }
+        }
+        // Rows of 6, packed left (a stretched NSGridView spread them across the width).
+        let grid = NSStackView()
+        grid.orientation = .vertical
+        grid.alignment = .leading
+        grid.spacing = 10
+        var i = 0
+        while i < iconCells.count {
+            let r = NSStackView(views: Array(iconCells[i ..< min(i + 6, iconCells.count)]))
+            r.orientation = .horizontal; r.spacing = 10; r.alignment = .centerY
+            grid.addArrangedSubview(r)
+            i += 6
+        }
+        return grid
+    }
+
+    private func pickIcon(_ name: String) {
+        AboutWindowController.applyIcon(named: name)
+        for c in iconCells { c.selected = (c.name == name) }
+    }
+
+    private func sectionHeader(_ s: String) -> NSTextField {
+        let l = NSTextField(labelWithString: s)
+        l.attributedStringValue = NSAttributedString(string: s.uppercased(), attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor(white: 0.5, alpha: 1),
+            .kern: 0.8,
+        ])
+        return l
+    }
+
+    private func card(_ rows: [NSView]) -> NSView {
+        let inner = NSStackView(views: rows)
+        inner.orientation = .vertical
+        inner.alignment = .leading
+        inner.spacing = 12
+        inner.translatesAutoresizingMaskIntoConstraints = false
+        let v = CardView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(inner)
+        NSLayoutConstraint.activate([
+            inner.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 16),
+            inner.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -16),
+            inner.topAnchor.constraint(equalTo: v.topAnchor, constant: 14),
+            inner.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -14),
+        ])
+        return v
     }
 
     /// Vesta's current config text — the editable file if it exists, else the
@@ -139,7 +283,10 @@ final class SettingsWindowController: NSWindowController {
 
     private func row(_ label: String, _ control: NSView, key: String? = nil) -> NSView {
         let l = NSTextField(labelWithString: label)
-        l.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        l.font = .systemFont(ofSize: 12)
+        l.textColor = NSColor(white: 0.78, alpha: 1)
+        l.alignment = .left
+        l.widthAnchor.constraint(equalToConstant: 104).isActive = true
         var views: [NSView] = [l, control]
         // Lua wins: if init.lua sets this key, it's Lua-owned — disable the control and badge it.
         if let key, luaConfigOverrides[key] != nil {
@@ -237,12 +384,79 @@ final class SettingsWindowController: NSWindowController {
         configView?.string = currentConfigText()
     }
 
+    /// Filter the (potentially huge) plugin list by substring — hidden rows collapse out
+    /// of the stack so scrolling stays short.
+    @objc private func filterPlugins(_ f: NSSearchField) {
+        let q = f.stringValue.lowercased()
+        for cb in pluginBoxes {
+            let name = cb.identifier?.rawValue ?? cb.title
+            cb.isHidden = !(q.isEmpty || name.lowercased().contains(q))
+        }
+    }
+
     @objc private func pluginToggled(_ b: NSButton) {
-        LuaRuntime.shared.setPluginEnabled(b.title, b.state == .on)
+        LuaRuntime.shared.setPluginEnabled(b.identifier?.rawValue ?? b.title, b.state == .on)
         onReload()
     }
 
     @objc private func importTapped() { onImport() }
     @objc private func openTapped()   { onOpenConfig() }
     @objc private func reloadTapped() { onReload() }
+}
+
+/// Top-down document view for the settings scroll view (default NSView is bottom-up).
+private final class FlippedView: NSView { override var isFlipped: Bool { true } }
+
+/// Subtle rounded background for a settings section.
+private final class CardView: NSView {
+    override var isFlipped: Bool { true }
+    override func draw(_ dirty: NSRect) {
+        let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 12, yRadius: 12)
+        NSColor(white: 1, alpha: 0.05).setFill(); p.fill()
+        NSColor(white: 1, alpha: 0.09).setStroke(); p.lineWidth = 1; p.stroke()
+    }
+}
+
+/// A clickable app-icon thumbnail with an accent selection ring.
+private final class IconCell: NSView {
+    let name: String
+    private let onPick: (String) -> Void
+    private let accent: NSColor
+    var selected: Bool { didSet { needsDisplay = true } }
+
+    init(name: String, image: NSImage, selected: Bool, accent: NSColor, onPick: @escaping (String) -> Void) {
+        self.name = name; self.onPick = onPick; self.accent = accent; self.selected = selected
+        super.init(frame: .zero)
+        wantsLayer = true
+        translatesAutoresizingMaskIntoConstraints = false
+        let iv = NSImageView(image: image)
+        iv.imageScaling = .scaleProportionallyUpOrDown
+        iv.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iv)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 52),
+            heightAnchor.constraint(equalToConstant: 52),
+            iv.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
+            iv.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            iv.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            iv.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override func draw(_ dirty: NSRect) {
+        let r = bounds.insetBy(dx: 1, dy: 1)
+        NSBezierPath(roundedRect: r, xRadius: 13, yRadius: 13).fill(with: NSColor(white: 1, alpha: selected ? 0.10 : 0.04))
+        if selected {
+            let ring = NSBezierPath(roundedRect: r.insetBy(dx: 0.75, dy: 0.75), xRadius: 12.5, yRadius: 12.5)
+            accent.setStroke(); ring.lineWidth = 2; ring.stroke()
+        }
+    }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func mouseDown(with event: NSEvent) { onPick(name) }
+}
+
+private extension NSBezierPath {
+    func fill(with color: NSColor) { color.setFill(); fill() }
 }

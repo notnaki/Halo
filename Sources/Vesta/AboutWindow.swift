@@ -3,11 +3,16 @@ import AppKit
 /// Custom About panel (replaces the stock one): app icon, name, tagline, then
 /// Version / Build / Commit rows and Docs / GitHub buttons. Version/build/commit
 /// come from the bundle (stamped by make-app.sh from the git tag + history).
+/// Easter egg: click the icon to cycle through flame color + corruption variants.
 @MainActor
 final class AboutWindowController: NSWindowController {
     private let repo = "https://github.com/notnaki/Vesta"
     private let docsURL = "https://notnaki.github.io/vesta-site/docs.html"
     private let theme: Theme
+    private var iconView: NSImageView!
+    private var iconVariants: [(name: String, image: NSImage)] = []
+    private var iconIdx = 0
+    static let iconKey = "VestaIconVariant"   // persisted chosen-variant NAME (filename stem)
 
     init(theme: Theme) {
         self.theme = theme
@@ -31,11 +36,20 @@ final class AboutWindowController: NSWindowController {
     private func build() {
         guard let content = window?.contentView else { return }
 
-        let icon = NSImageView(image: NSApp.applicationIconImage)
+        // Easter egg: click the icon to cycle the Icon Composer flame variants (white →
+        // pink → corruption stages), bundled under Resources/icon-variants. Falls back to the
+        // live app icon if they're missing (e.g. the dev binary).
+        iconVariants = Self.loadVariants()
+        if iconVariants.isEmpty { iconVariants = [("", NSApp.applicationIconImage)] }
+        let savedName = UserDefaults.standard.string(forKey: Self.iconKey)
+        iconIdx = iconVariants.firstIndex(where: { $0.name == savedName }) ?? 0
+        let icon = NSImageView(image: iconVariants[iconIdx].image)
+        iconView = icon
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.widthAnchor.constraint(equalToConstant: 96).isActive = true
         icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
+        icon.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(cycleIcon)))
 
         let name = NSTextField(labelWithString: "Vesta")
         name.font = .systemFont(ofSize: 28, weight: .bold)
@@ -103,6 +117,62 @@ final class AboutWindowController: NSWindowController {
         let h = topPad + stack.fittingSize.height + botPad
         window?.setContentSize(NSSize(width: 340, height: h))
         window?.center()
+    }
+
+    // MARK: - icon easter egg
+
+    @objc private func cycleIcon() {
+        guard iconVariants.count > 1 else { return }
+        iconIdx = (iconIdx + 1) % iconVariants.count
+        let next = iconVariants[iconIdx]
+        iconView.wantsLayer = true
+        // Crossfade: phase out, swap, phase back in.
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25; ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            iconView.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.iconView.image = next.image
+            // Permanently apply the chosen variant (live tile + on-disk bundle icon + persist).
+            Self.applyIcon(named: next.name)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.32; ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.iconView.animator().alphaValue = 1
+            }
+        })
+    }
+
+    /// Bundled Icon Composer flame variants as (name, image) — name is the filename stem
+    /// (e.g. "00-white"), sorted so the order is white → pink → corruption stages. Keyed by
+    /// NAME (not position) so a missing/undecodable file can't shift the saved choice.
+    static func loadVariants() -> [(name: String, image: NSImage)] {
+        guard let dir = Bundle.main.resourceURL?.appendingPathComponent("icon-variants"),
+              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return [] }
+        return files.filter { $0.pathExtension.lowercased() == "icns" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .compactMap { url in NSImage(contentsOf: url).map { (url.deletingPathExtension().lastPathComponent, $0) } }
+    }
+
+    /// The shipped-default variant name (the first, white); choosing it clears the custom icon.
+    static var defaultVariant: String { loadVariants().first?.name ?? "" }
+
+    /// Permanently switch the app icon to the variant named `name`: live Dock tile, write the
+    /// icon onto the Vesta.app bundle (so Finder/Dock keep it while quit), and persist the
+    /// choice. Re-applied on launch so it survives an in-place self-update. Returns whether
+    /// the on-disk stamp succeeded (false e.g. on a read-only install — the live tile still
+    /// updates, just not the on-quit Finder icon).
+    @discardableResult
+    static func applyIcon(named name: String) -> Bool {
+        let variants = loadVariants()
+        guard let v = variants.first(where: { $0.name == name }) ?? variants.first else { return false }
+        NSApp.applicationIconImage = v.image   // live Dock tile while running
+        UserDefaults.standard.set(v.name, forKey: iconKey)
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return false }
+        // The first variant (white) is the shipped default → clear any custom icon; else stamp
+        // it. setIcon returns false if it can't write the bundle (read-only / non-admin).
+        let isDefault = v.name == variants.first?.name
+        return NSWorkspace.shared.setIcon(isDefault ? nil : v.image, forFile: Bundle.main.bundleURL.path, options: [])
     }
 
     // MARK: - small builders
