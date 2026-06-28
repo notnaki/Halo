@@ -10,9 +10,9 @@ final class AboutWindowController: NSWindowController {
     private let docsURL = "https://notnaki.github.io/vesta-site/docs.html"
     private let theme: Theme
     private var iconView: NSImageView!
-    private var iconVariants: [NSImage] = []
+    private var iconVariants: [(name: String, image: NSImage)] = []
     private var iconIdx = 0
-    static let iconKey = "VestaIconVariant"   // persisted chosen-variant index
+    static let iconKey = "VestaIconVariant"   // persisted chosen-variant NAME (filename stem)
 
     init(theme: Theme) {
         self.theme = theme
@@ -40,9 +40,10 @@ final class AboutWindowController: NSWindowController {
         // pink → corruption stages), bundled under Resources/icon-variants. Falls back to the
         // live app icon if they're missing (e.g. the dev binary).
         iconVariants = Self.loadVariants()
-        if iconVariants.isEmpty { iconVariants = [NSApp.applicationIconImage] }
-        iconIdx = min(max(UserDefaults.standard.integer(forKey: Self.iconKey), 0), iconVariants.count - 1)
-        let icon = NSImageView(image: iconVariants[iconIdx])
+        if iconVariants.isEmpty { iconVariants = [("", NSApp.applicationIconImage)] }
+        let savedName = UserDefaults.standard.string(forKey: Self.iconKey)
+        iconIdx = iconVariants.firstIndex(where: { $0.name == savedName }) ?? 0
+        let icon = NSImageView(image: iconVariants[iconIdx].image)
         iconView = icon
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -131,9 +132,9 @@ final class AboutWindowController: NSWindowController {
             iconView.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             guard let self else { return }
-            self.iconView.image = next
+            self.iconView.image = next.image
             // Permanently apply the chosen variant (live tile + on-disk bundle icon + persist).
-            Self.applyIcon(self.iconIdx)
+            Self.applyIcon(named: next.name)
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.32; ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 self.iconView.animator().alphaValue = 1
@@ -141,37 +142,37 @@ final class AboutWindowController: NSWindowController {
         })
     }
 
-    /// Load the bundled Icon Composer flame variants (Resources/icon-variants/*.icns —
-    /// the real compiled app icons, not flat PNGs), sorted by name so the order is
-    /// white → pink → corruption stages.
-    static func loadVariants() -> [NSImage] {
+    /// Bundled Icon Composer flame variants as (name, image) — name is the filename stem
+    /// (e.g. "00-white"), sorted so the order is white → pink → corruption stages. Keyed by
+    /// NAME (not position) so a missing/undecodable file can't shift the saved choice.
+    static func loadVariants() -> [(name: String, image: NSImage)] {
         guard let dir = Bundle.main.resourceURL?.appendingPathComponent("icon-variants"),
               let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return [] }
         return files.filter { $0.pathExtension.lowercased() == "icns" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .compactMap { NSImage(contentsOf: $0) }
+            .compactMap { url in NSImage(contentsOf: url).map { (url.deletingPathExtension().lastPathComponent, $0) } }
     }
 
-    /// Permanently switch the app icon to variant `index`: update the live Dock tile,
-    /// write the icon onto the Vesta.app bundle (so Finder/Dock keep it while Vesta is
-    /// quit), and record the choice. Called again on launch so the on-disk icon is
-    /// re-stamped after an in-place self-update (which ships a fresh, default bundle).
-    static func applyIcon(_ index: Int) {
+    /// The shipped-default variant name (the first, white); choosing it clears the custom icon.
+    static var defaultVariant: String { loadVariants().first?.name ?? "" }
+
+    /// Permanently switch the app icon to the variant named `name`: live Dock tile, write the
+    /// icon onto the Vesta.app bundle (so Finder/Dock keep it while quit), and persist the
+    /// choice. Re-applied on launch so it survives an in-place self-update. Returns whether
+    /// the on-disk stamp succeeded (false e.g. on a read-only install — the live tile still
+    /// updates, just not the on-quit Finder icon).
+    @discardableResult
+    static func applyIcon(named name: String) -> Bool {
         let variants = loadVariants()
-        guard index >= 0, index < variants.count else { return }
-        let img = variants[index]
-        NSApp.applicationIconImage = img   // live Dock tile while running
-        let url = Bundle.main.bundleURL
-        if url.pathExtension == "app" {
-            // Write the icon onto the .app so it persists when Vesta is quit. index 0
-            // (white) is the shipped default → clear any custom icon so it reverts cleanly.
-            // setIcon needs write access to the bundle; it no-ops if we can't write there.
-            // (The Dock caches its icon, so Finder/Dock pick the change up on the next
-            // relaunch — a one-relaunch lag we accept rather than restarting the Dock.)
-            NSWorkspace.shared.setIcon(index == 0 ? nil : img, forFile: url.path, options: [])
-        }
-        UserDefaults.standard.set(index, forKey: iconKey)
+        guard let v = variants.first(where: { $0.name == name }) ?? variants.first else { return false }
+        NSApp.applicationIconImage = v.image   // live Dock tile while running
+        UserDefaults.standard.set(v.name, forKey: iconKey)
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return false }
+        // The first variant (white) is the shipped default → clear any custom icon; else stamp
+        // it. setIcon returns false if it can't write the bundle (read-only / non-admin).
+        let isDefault = v.name == variants.first?.name
+        return NSWorkspace.shared.setIcon(isDefault ? nil : v.image, forFile: Bundle.main.bundleURL.path, options: [])
     }
 
     // MARK: - small builders

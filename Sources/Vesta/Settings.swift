@@ -221,9 +221,9 @@ final class SettingsWindowController: NSWindowController {
 
     private func iconGrid() -> NSView {
         let variants = AboutWindowController.loadVariants()
-        let saved = max(0, min(UserDefaults.standard.integer(forKey: AboutWindowController.iconKey), variants.count - 1))
-        iconCells = variants.enumerated().map { (i, img) in
-            IconCell(index: i, image: img, selected: i == saved, accent: accent) { [weak self] idx in self?.pickIcon(idx) }
+        let saved = UserDefaults.standard.string(forKey: AboutWindowController.iconKey) ?? variants.first?.name
+        iconCells = variants.map { v in
+            IconCell(name: v.name, image: v.image, selected: v.name == saved, accent: accent) { [weak self] n in self?.pickIcon(n) }
         }
         // Rows of 6, packed left (a stretched NSGridView spread them across the width).
         let grid = NSStackView()
@@ -240,9 +240,9 @@ final class SettingsWindowController: NSWindowController {
         return grid
     }
 
-    private func pickIcon(_ index: Int) {
-        AboutWindowController.applyIcon(index)
-        for c in iconCells { c.selected = (c.index == index) }
+    private func pickIcon(_ name: String) {
+        AboutWindowController.applyIcon(named: name)
+        for c in iconCells { c.selected = (c.name == name) }
     }
 
     private func sectionHeader(_ s: String) -> NSTextField {
@@ -419,13 +419,13 @@ private final class CardView: NSView {
 
 /// A clickable app-icon thumbnail with an accent selection ring.
 private final class IconCell: NSView {
-    let index: Int
-    private let onPick: (Int) -> Void
+    let name: String
+    private let onPick: (String) -> Void
     private let accent: NSColor
     var selected: Bool { didSet { needsDisplay = true } }
 
-    init(index: Int, image: NSImage, selected: Bool, accent: NSColor, onPick: @escaping (Int) -> Void) {
-        self.index = index; self.onPick = onPick; self.accent = accent; self.selected = selected
+    init(name: String, image: NSImage, selected: Bool, accent: NSColor, onPick: @escaping (String) -> Void) {
+        self.name = name; self.onPick = onPick; self.accent = accent; self.selected = selected
         super.init(frame: .zero)
         wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
@@ -454,7 +454,7 @@ private final class IconCell: NSView {
         }
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
-    override func mouseDown(with event: NSEvent) { onPick(index) }
+    override func mouseDown(with event: NSEvent) { onPick(name) }
 }
 
 private extension NSBezierPath {

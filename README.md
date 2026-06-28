@@ -30,10 +30,10 @@ and an agent-control CLI on top.
   a macOS Notification Center banner when Vesta is backgrounded (or when forced).
 - **Self-updating** — when a newer release exists, a badge appears at the sidebar
   bottom; click it to download, install (in place), and relaunch — no manual DMG.
-- **Pick your app icon** — the **Vesta → App Icon** menu swaps between a clean
-  white flame, a pink one, and ten progressively "corrupted" stages. The choice is
-  written onto the `.app` bundle, so it sticks in Finder/Dock across quits and
-  survives in-place updates.
+- **Pick your app icon** — **Settings ▸ App Icon** swaps between a clean white
+  flame, a pink one, and ten progressively "corrupted" stages (or click the icon
+  in the About panel to cycle them). The choice is written onto the `.app` bundle,
+  so it sticks in Finder/Dock across quits and survives in-place updates.
 - **Everything from your config** — colors, fonts, sidebar width, divider width
   are all `vesta-*` keys in the same ghostty config file. Empty config = sane
   defaults.
