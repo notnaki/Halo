@@ -132,6 +132,7 @@ final class Session {
     func resize(cols rawCols: Int32, rows rawRows: Int32) {
         let cols = rawCols > 0 ? rawCols : 80
         let rows = rawRows > 0 ? rawRows : 24
+        guard cols != self.cols || rows != self.rows else { return }   // no-op → no spurious SIGWINCH
         self.cols = cols; self.rows = rows
         var ws = winsize(ws_row: UInt16(rows), ws_col: UInt16(cols), ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(masterFD, TIOCSWINSZ, &ws)

@@ -188,8 +188,14 @@ final class Daemon {
             // helloAck.version to its own muxProtocolVersion and bails on mismatch. This
             // is what makes remote attach (M5) against a newer/older daemon safe.
             let s: Session
-            if let existing = sessions[paneID] { s = existing }
-            else {
+            if let existing = sessions[paneID] {
+                s = existing
+                // Reattach at the client's CURRENT size — the window may have resized while
+                // detached. Without this the shell's PTY keeps its old width and COLUMNS no
+                // longer matches the render, so zsh prints a stray `%` (PROMPT_EOL_MARK) every
+                // prompt. resize() no-ops when the size is unchanged.
+                existing.resize(cols: Int32(cols), rows: Int32(rows))
+            } else {
                 guard let fresh = Session(paneID: paneID, cols: Int32(cols), rows: Int32(rows), cwd: cwd, logEnabled: logEnabled) else {
                     if !sendFrame(fd, encode(ServerFrame.exited(status: 1))) { closeClient(fd) }
                     return
