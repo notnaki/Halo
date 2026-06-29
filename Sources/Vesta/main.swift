@@ -609,7 +609,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? data.write(to: URL(fileURLWithPath: Self.windowsFile), options: .atomic)
     }
 
-    func applicationWillTerminate(_ note: Notification) { saveWindows() }
+    func applicationWillTerminate(_ note: Notification) {
+        saveWindows()
+        #if DEBUG
+        // DEV builds only: kill the session daemon on quit. vestad is single-instance per
+        // user, so a stale dev daemon (ad-hoc signed, often under a TCC-protected path like
+        // ~/Desktop) would otherwise linger and serve a later RELEASE build — which makes
+        // macOS re-prompt for Desktop access on every command. Release builds never do this:
+        // there the daemon must outlive quit so sessions survive.
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        p.arguments = ["-x", "vestad"]
+        try? p.run()
+        #endif
+    }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         Fonts.register()  // bundle Geist/Martian Mono before building UI
