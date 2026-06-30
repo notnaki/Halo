@@ -516,6 +516,12 @@ import GhosttyKit
 
     override func mouseDown(with event: NSEvent) {
         guard let surface else { return }
+        // Anchor at the real click location FIRST. ghostty starts a selection at its
+        // last-known mouse position; hover updates can be stale right before a press
+        // (and after a prior selection the position sits at the previous drag's end),
+        // so without this a click/drag selects from the wrong cell and a plain click
+        // can spuriously extend the old selection.
+        sendMousePos(event)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT,
                                      ghosttyMods(event.modifierFlags))
     }
@@ -529,6 +535,7 @@ import GhosttyKit
 
     override func rightMouseDown(with event: NSEvent) {
         guard let surface else { return super.rightMouseDown(with: event) }
+        sendMousePos(event)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT,
                                      ghosttyMods(event.modifierFlags))
     }
@@ -541,6 +548,7 @@ import GhosttyKit
 
     override func otherMouseDown(with event: NSEvent) {
         guard let surface else { return }
+        sendMousePos(event)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, mouseButton(for: event),
                                      ghosttyMods(event.modifierFlags))
     }
